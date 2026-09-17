@@ -7,8 +7,8 @@
 
 Effortlessly switch your Minecraft server's software and version directly from the Pelican Panel web interface. No manual SFTP uploads or JAR file renaming required.
 
-> [!NOTE]
-> **Beta Release**: This plugin is currently in active beta. While core workflows (backup, Wings pull, verification, and UI monitoring) have been thoroughly tested, please report any issues or feedback on GitHub.
+> [!WARNING]
+> **Beta Release**: This plugin is currently in early beta and actively under development. Features and workflows are still being refined, and you may encounter bugs. Please report any issues or suggestions on GitHub!
 
 ---
 
