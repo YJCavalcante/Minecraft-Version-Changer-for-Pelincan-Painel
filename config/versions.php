@@ -14,6 +14,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Custom Queue Name
+    |--------------------------------------------------------------------------
+    |
+    | The Laravel queue name to dispatch version change jobs to. Default is null
+    | (uses Pelican's default queue consumed by standard workers).
+    |
+    */
+    'queue' => env('VERSIONS_QUEUE', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | API Cache TTL
     |--------------------------------------------------------------------------
     |
@@ -32,6 +43,30 @@ return [
     |
     */
     'keep_backup' => (bool) env('VERSIONS_KEEP_BACKUP', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Power Automation
+    |--------------------------------------------------------------------------
+    |
+    | Automatically stop the server safely before changing versions and
+    | restart it automatically once the download and verification finishes.
+    |
+    */
+    'auto_stop_server'    => (bool) env('VERSIONS_AUTO_STOP', true),
+    'auto_restart_server' => (bool) env('VERSIONS_AUTO_RESTART', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Maintenance Automation
+    |--------------------------------------------------------------------------
+    |
+    | Auto-accept Minecraft EULA (eula=true) and clean the legacy /libraries/
+    | directory to prevent class collisions across Minecraft versions.
+    |
+    */
+    'auto_accept_eula' => (bool) env('VERSIONS_AUTO_ACCEPT_EULA', true),
+    'clean_libraries'  => (bool) env('VERSIONS_CLEAN_LIBRARIES', true),
 
     /*
     |--------------------------------------------------------------------------

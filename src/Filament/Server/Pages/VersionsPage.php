@@ -41,8 +41,21 @@ class VersionsPage extends Page
         }
 
         $tags = array_map('strtolower', (array) ($server->egg?->tags ?? []));
+        $eggName = strtolower($server->egg?->name ?? '');
+        $startup = strtolower($server->startup ?? '');
+
         $isMinecraft = in_array('minecraft', $tags, true)
-            || str_contains(strtolower($server->egg?->name ?? ''), 'minecraft');
+            || str_contains($eggName, 'minecraft')
+            || str_contains($eggName, 'paper')
+            || str_contains($eggName, 'purpur')
+            || str_contains($eggName, 'forge')
+            || str_contains($eggName, 'fabric')
+            || str_contains($eggName, 'spigot')
+            || str_contains($eggName, 'bungee')
+            || str_contains($eggName, 'velocity')
+            || str_contains($startup, 'server.jar')
+            || str_contains($startup, 'minecraft');
+
         if (!$isMinecraft) {
             return false;
         }
@@ -338,6 +351,14 @@ class VersionsPage extends Page
             return;
         }
 
+        if (empty($this->selectedBuild) && !empty($this->selectedSoftware) && !empty($this->selectedVersion)) {
+            $builds = $mcJarsService->getBuilds($this->selectedSoftware, $this->selectedVersion);
+            if (!empty($builds)) {
+                $this->availableBuilds = $builds;
+                $this->selectBuild($this->selectedBuildNumber);
+            }
+        }
+
         $build = $this->selectedBuild ?? [];
         $jarDetails = $mcJarsService->resolveJarDetails($build);
 
@@ -406,9 +427,14 @@ class VersionsPage extends Page
             $this->loadHistory();
 
             if ($record->status === VersionChange::STATUS_DONE) {
+                $restarted = str_contains($record->log ?? '', 'automatically restarted');
+                $body = $restarted
+                    ? 'The server jar has been updated and your server was automatically restarted.'
+                    : 'The server jar has been updated. You can now start your server from the console.';
+
                 Notification::make()
                     ->title('Version Changed Successfully!')
-                    ->body('The server.jar has been updated. Please restart your server to apply.')
+                    ->body($body)
                     ->success()
                     ->send();
             } elseif ($record->status === VersionChange::STATUS_FAILED) {

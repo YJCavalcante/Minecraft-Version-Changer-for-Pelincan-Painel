@@ -4,6 +4,7 @@ namespace Pelican\Versions\Services;
 
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
+use App\Repositories\Daemon\DaemonServerRepository;
 use Pelican\Versions\Models\VersionChange;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -11,12 +12,17 @@ use Throwable;
 
 class VersionChangeService
 {
+    private DaemonServerRepository $serverRepo;
+
     public function __construct(
-        private DaemonFileRepository $fileRepo
-    ) {}
+        private DaemonFileRepository $fileRepo,
+        ?DaemonServerRepository $serverRepo = null
+    ) {
+        $this->serverRepo = $serverRepo ?? app(DaemonServerRepository::class);
+    }
 
     /**
-     * Execute the full version change workflow on the remote Wings daemon.
+     * Execute the full automated version change workflow on the remote Wings daemon.
      *
      * @throws Throwable
      */
@@ -28,17 +34,41 @@ class VersionChangeService
             throw new RuntimeException("Server not found for VersionChange #{$record->id}");
         }
 
-        // Bind the daemon repository to this specific server
+        // Bind daemon repositories to this specific server
         $this->fileRepo->setServer($server);
+        $this->serverRepo->setServer($server);
 
         try {
-            $this->stepBackup($record);
-            $this->stepDownload($record);
-            $this->stepVerify($record);
+            // Step 1: Check server state and gracefully stop if running
+            $wasRunning = $this->stepPowerStopIfRunning($record);
+
+            // Step 2: Backup previous JAR and clean legacy libraries (/libraries/)
+            $this->stepBackupAndClean($record);
+
+            // Step 3: Pull the new JAR or ZIP file
+            $isZip = $this->stepDownload($record);
+
+            // Step 4: Verify file integrity and extract if archive
+            $this->stepVerifyAndExtract($record, $isZip);
+
+            // Step 5: Auto-accept Minecraft EULA (eula=true) and sync egg startup variable
+            $this->stepAcceptEula($record);
             $this->stepSyncEggVariable($record, $server);
 
+            // Step 6: Automatically restart server if it was running before
+            if ($wasRunning && config('versions.auto_restart_server', true)) {
+                $this->stepPowerRestart($record);
+            } else {
+                $record->appendLog('Step 6/6: Server is offline and ready to start.');
+            }
+
             $record->markDone();
-            $record->appendLog('Version change completed successfully! Please restart the server to apply.');
+
+            if ($wasRunning && config('versions.auto_restart_server', true)) {
+                $record->appendLog('Version change completed successfully! Server has been automatically restarted.');
+            } else {
+                $record->appendLog('Version change completed successfully! You can now start your server.');
+            }
         } catch (Throwable $e) {
             $record->markFailed($e->getMessage());
             $record->appendLog('ERROR: ' . $e->getMessage());
@@ -55,62 +85,133 @@ class VersionChangeService
     }
 
     /**
-     * Step 1: Backup existing server.jar if present.
+     * Step 1: Gracefully stop server if online to prevent file corruption.
      */
-    private function stepBackup(VersionChange $record): void
+    private function stepPowerStopIfRunning(VersionChange $record): bool
     {
-        if (!config('versions.keep_backup', true)) {
-            $record->appendLog('Step 1/3: Backup skipped (disabled in configuration).');
-            return;
+        if (!config('versions.auto_stop_server', true)) {
+            $record->appendLog('Step 1/6: Server power automation disabled in config.');
+            return false;
         }
 
-        $record->appendLog('Step 1/3: Checking existing server files for backup...');
-
         try {
-            $entries = (array) $this->fileRepo->getDirectory('/');
-            $hasJar = collect($entries)->contains(
-                fn ($e) => ($e['name'] ?? '') === 'server.jar' && !($e['directory'] ?? false)
-            );
+            $details = $this->serverRepo->getDetails();
+            $state = strtolower($details['state'] ?? 'offline');
+            $isRunning = in_array($state, ['running', 'starting', 'restarting'], true);
+            $isStopping = ($state === 'stopping');
 
-            if ($hasJar) {
-                // If a prior backup already exists, remove it first to avoid collision
-                $hasOldBak = collect($entries)->contains(
-                    fn ($e) => ($e['name'] ?? '') === 'server.jar.bak' && !($e['directory'] ?? false)
-                );
-
-                if ($hasOldBak) {
-                    $this->fileRepo->deleteFiles('/', ['server.jar.bak']);
-                    $record->appendLog('  Removed previous server.jar.bak backup.');
+            if ($isRunning || $isStopping) {
+                if ($isRunning) {
+                    $record->appendLog("Step 1/6: Server is currently online ({$state}).");
+                    $record->appendLog('  Sending graceful stop signal to prevent file lock and corruption...');
+                    $this->serverRepo->power('stop');
+                } else {
+                    $record->appendLog("Step 1/6: Server is currently shutting down ({$state}). Waiting for clean stop...");
                 }
 
-                $this->fileRepo->renameFiles('/', [
-                    ['from' => 'server.jar', 'to' => 'server.jar.bak']
-                ]);
+                // Wait up to 21 seconds for clean shutdown
+                for ($i = 0; $i < 7; $i++) {
+                    sleep(3);
+                    try {
+                        $check = $this->serverRepo->getDetails();
+                        $currentState = strtolower($check['state'] ?? 'offline');
+                        if (in_array($currentState, ['offline', 'exited'], true)) {
+                            $record->appendLog('  Server stopped cleanly.');
+                            return true;
+                        }
+                    } catch (Throwable) {}
+                }
 
-                $record->appendLog('  Renamed existing server.jar → server.jar.bak.');
+                $record->appendLog('  Shutdown wait timeout reached. Proceeding with file modifications.');
+                return true;
             } else {
-                $record->appendLog('  No existing server.jar found in root directory; skipping backup.');
+                $record->appendLog('Step 1/6: Server is offline. Ready for file modifications.');
+                return false;
             }
         } catch (Throwable $e) {
-            throw new RuntimeException('Backup step failed: ' . $e->getMessage(), 0, $e);
+            $record->appendLog('  Notice: Could not inspect server power state: ' . $e->getMessage());
+            return false;
         }
     }
 
     /**
-     * Step 2: Instruct Wings to download the new server JAR.
+     * Step 2: Backup existing server.jar and clean legacy /libraries/ folder.
      */
-    private function stepDownload(VersionChange $record): void
+    private function stepBackupAndClean(VersionChange $record): void
     {
-        $record->appendLog('Step 2/3: Telling Wings daemon to pull the new JAR...');
-        $record->appendLog("  Source URL: {$record->jar_url}");
+        $record->appendLog('Step 2/6: Checking existing files and cleaning legacy libraries...');
+
+        try {
+            $entries = (array) $this->fileRepo->getDirectory('/');
+
+            $hasJar = collect($entries)->contains(
+                fn ($e) => ($e['name'] ?? '') === 'server.jar' && !($e['directory'] ?? false)
+            );
+
+            // Handle backup / old JAR removal
+            if ($hasJar) {
+                if (config('versions.keep_backup', true)) {
+                    $hasOldBak = collect($entries)->contains(
+                        fn ($e) => ($e['name'] ?? '') === 'server.jar.bak' && !($e['directory'] ?? false)
+                    );
+
+                    if ($hasOldBak) {
+                        $this->fileRepo->deleteFiles('/', ['server.jar.bak']);
+                        $record->appendLog('  Removed previous server.jar.bak backup.');
+                    }
+
+                    $this->fileRepo->renameFiles('/', [
+                        ['from' => 'server.jar', 'to' => 'server.jar.bak']
+                    ]);
+
+                    $record->appendLog('  Renamed existing server.jar → server.jar.bak.');
+                } else {
+                    $this->fileRepo->deleteFiles('/', ['server.jar']);
+                    $record->appendLog('  Deleted previous server.jar (backup disabled).');
+                }
+            } else {
+                $record->appendLog('  No existing server.jar found; skipping backup.');
+            }
+
+            // Clean legacy /libraries/ folder to avoid Minecraft version class conflicts
+            if (config('versions.clean_libraries', true)) {
+                $hasLibraries = collect($entries)->contains(
+                    fn ($e) => ($e['name'] ?? '') === 'libraries' && ($e['directory'] ?? false)
+                );
+
+                if ($hasLibraries) {
+                    $this->fileRepo->deleteFiles('/', ['libraries']);
+                    $record->appendLog('  Removed old /libraries/ directory to prevent dependency collisions.');
+                }
+            }
+        } catch (Throwable $e) {
+            throw new RuntimeException('Backup/Clean step failed: ' . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
+     * Step 3: Instruct Wings daemon to pull the new JAR or ZIP file.
+     *
+     * @return bool True if downloading a ZIP archive, false for JAR
+     */
+    private function stepDownload(VersionChange $record): bool
+    {
+        $urlPath = parse_url($record->jar_url, PHP_URL_PATH) ?? '';
+        $isZip = str_ends_with(strtolower($urlPath), '.zip')
+            || str_contains(strtolower($record->jar_url), '.zip');
+
+        $filename = $isZip ? 'server.zip' : 'server.jar';
+
+        $record->appendLog('Step 3/6: Telling Wings daemon to pull the new files...');
+        $record->appendLog("  Target: {$record->software} {$record->minecraft_version} ({$record->build_name})");
 
         try {
             $this->fileRepo->pull($record->jar_url, '/', [
-                'filename'   => 'server.jar',
+                'filename'   => $filename,
                 'foreground' => false,
             ]);
         } catch (Throwable $e) {
-            throw new RuntimeException('Failed to send download command to Wings: ' . $e->getMessage(), 0, $e);
+            throw new RuntimeException("Failed to send download command to Wings: {$e->getMessage()}", 0, $e);
         }
 
         // Wait for download to finish by monitoring file presence and size stabilization
@@ -119,13 +220,17 @@ class VersionChangeService
         $lastSize = -1;
         $stableCount = 0;
         $size = null;
+        $loggedWaiting = false;
 
         while (time() < $deadline) {
             sleep(4);
-            $size = $this->getRemoteFileSize('server.jar');
+            $size = $this->getRemoteFileSize($filename);
 
             if ($size === null || $size <= 0) {
-                $record->appendLog('  Waiting for download to begin on node...');
+                if (!$loggedWaiting) {
+                    $record->appendLog('  Waiting for download to begin on node...');
+                    $loggedWaiting = true;
+                }
                 continue;
             }
 
@@ -150,27 +255,29 @@ class VersionChangeService
         }
 
         if ($size === null || $size <= 0) {
-            throw new RuntimeException('Download timed out or server.jar was not created by Wings.');
+            throw new RuntimeException("Download timed out or {$filename} was not created by Wings.");
         }
 
-        $record->appendLog('  Download completed successfully: ' . $this->humanBytes($size));
+        $record->appendLog("  Download completed successfully: " . $this->humanBytes($size));
+
+        return $isZip;
     }
 
     /**
-     * Step 3: Verify the downloaded file integrity.
+     * Step 4: Verify the downloaded file integrity and extract if archive.
      */
-    private function stepVerify(VersionChange $record): void
+    private function stepVerifyAndExtract(VersionChange $record, bool $isZip): void
     {
-        $record->appendLog('Step 3/3: Verifying file integrity...');
+        $filename = $isZip ? 'server.zip' : 'server.jar';
+        $record->appendLog("Step 4/6: Verifying {$filename} integrity...");
 
-        $actual = $this->getRemoteFileSize('server.jar');
+        $actual = $this->getRemoteFileSize($filename);
 
         if ($actual === null || $actual <= 0) {
-            throw new RuntimeException('Verification failed: server.jar not found after download.');
+            throw new RuntimeException("Verification failed: {$filename} not found after download.");
         }
 
         if ($record->jar_size) {
-            // Allow 1% tolerance for upstream compression or header differences
             $tolerance = (int) max(1024, $record->jar_size * 0.01);
             if (abs($actual - $record->jar_size) > $tolerance) {
                 throw new RuntimeException(
@@ -181,10 +288,49 @@ class VersionChangeService
         } else {
             $record->appendLog('  File size verified: ' . $this->humanBytes($actual));
         }
+
+        // If this was a zip distribution, decompress into root directory
+        if ($isZip) {
+            $record->appendLog('  Extracting server.zip archive to root directory...');
+            try {
+                $this->fileRepo->decompressFile('/', 'server.zip');
+                $record->appendLog('  Decompression finished successfully.');
+
+                try {
+                    $this->fileRepo->deleteFiles('/', ['server.zip']);
+                    $record->appendLog('  Cleaned up temporary server.zip.');
+                } catch (Throwable) {}
+            } catch (Throwable $e) {
+                throw new RuntimeException("Failed to decompress {$filename}: " . $e->getMessage(), 0, $e);
+            }
+        }
     }
 
     /**
-     * Optional Step: Ensure SERVER_JARFILE environment variable is aligned.
+     * Step 5: Automatically accept Minecraft EULA (eula=true).
+     */
+    private function stepAcceptEula(VersionChange $record): void
+    {
+        if (!config('versions.auto_accept_eula', true)) {
+            return;
+        }
+
+        $record->appendLog('Step 5/6: Ensuring Minecraft EULA agreement (eula=true)...');
+
+        try {
+            $eulaContent = "# By changing the setting below you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).
+# Automatically managed by Minecraft Version Changer
+eula=true
+";
+            $this->fileRepo->putContent('eula.txt', $eulaContent);
+            $record->appendLog('  Wrote eula=true to eula.txt.');
+        } catch (Throwable $e) {
+            $record->appendLog('  Notice: Could not write eula.txt: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Step 5 (part 2): Ensure SERVER_JARFILE egg variable is aligned.
      */
     private function stepSyncEggVariable(VersionChange $record, Server $server): void
     {
@@ -196,6 +342,10 @@ class VersionChangeService
             if ($serverVar && $serverVar->variable_value !== 'server.jar') {
                 $serverVar->update(['variable_value' => 'server.jar']);
                 $record->appendLog('  Updated SERVER_JARFILE egg variable to "server.jar".');
+                try {
+                    $this->serverRepo->sync();
+                    $record->appendLog('  Synced environment configuration with Wings node.');
+                } catch (Throwable) {}
             }
         } catch (Throwable) {
             // Non-critical; ignore if egg doesn't define this variable
@@ -203,7 +353,22 @@ class VersionChangeService
     }
 
     /**
-     * Helper to retrieve remote file size from the directory listing.
+     * Step 6: Automatically restart the server if it was running before the change.
+     */
+    private function stepPowerRestart(VersionChange $record): void
+    {
+        $record->appendLog('Step 6/6: Automatically restarting server with the new version...');
+
+        try {
+            $this->serverRepo->power('start');
+            $record->appendLog('  Sent start signal to Wings. Server is booting up!');
+        } catch (Throwable $e) {
+            $record->appendLog('  Notice: Could not send start signal: ' . $e->getMessage() . '. Please boot manually from the console.');
+        }
+    }
+
+    /**
+     * Helper to retrieve remote file size from directory listing.
      */
     private function getRemoteFileSize(string $filename): ?int
     {

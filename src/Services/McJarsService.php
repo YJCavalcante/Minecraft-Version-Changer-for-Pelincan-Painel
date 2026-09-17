@@ -163,7 +163,7 @@ class McJarsService
         if (empty($url) && !empty($build['zipUrl'])) {
             $url = $build['zipUrl'];
         }
-        $size = isset($build['jarSize']) ? (int) $build['jarSize'] : null;
+        $size = isset($build['jarSize']) ? (int) $build['jarSize'] : (isset($build['zipSize']) ? (int) $build['zipSize'] : null);
 
         if (empty($url) && !empty($build['installation'][0][0]['url'])) {
             $url = $build['installation'][0][0]['url'];
@@ -188,8 +188,8 @@ class McJarsService
     {
         uksort($versions, function (string $a, string $b): int {
             // Clean versions for comparison (e.g. 1.21.4 vs 1.20.1)
-            $cleanA = preg_replace('/[^0-9.]/', '', $a);
-            $cleanB = preg_replace('/[^0-9.]/', '', $b);
+            $cleanA = trim((string) preg_replace('/[^0-9.]/', '', $a), '.');
+            $cleanB = trim((string) preg_replace('/[^0-9.]/', '', $b), '.');
 
             if (!empty($cleanA) && !empty($cleanB) && $cleanA !== $cleanB) {
                 return version_compare($cleanB, $cleanA);

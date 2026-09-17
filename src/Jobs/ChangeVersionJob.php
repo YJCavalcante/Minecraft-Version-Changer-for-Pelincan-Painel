@@ -22,8 +22,8 @@ class ChangeVersionJob implements ShouldQueue
     public function __construct(
         public readonly int $changeRecordId
     ) {
-        $queue = config('versions.queue', 'standard');
-        if ($queue) {
+        $queue = config('versions.queue', null);
+        if (!empty($queue)) {
             $this->onQueue($queue);
         }
     }
