@@ -41,7 +41,7 @@ Effortlessly switch your Minecraft server's software and version directly from t
 
 ### Method 1: Web Interface (Recommended)
 
-1. Download the latest `versions.zip` release from the [Releases](https://github.com/) page.
+1. Download the latest `versions.zip` release from the [Releases](https://github.com/YJCavalcante/Minecraft-Version-Changer-for-Pelincan-Painel/releases) page.
 2. Log into your Pelican Panel as an administrator and navigate to **Admin → Plugins**.
 3. Click the **Import from file** button in the upper right corner.
 4. Select `versions.zip` and upload.
@@ -96,7 +96,7 @@ The **Version Changer** navigation item appears in the server navigation for Min
 
 ## 👤 Author
 
-- **Yuri J. Cavalcante** ([@yuri.j.cavalcante](https://github.com/))
+- **Yuri J. Cavalcante** ([@YJCavalcante](https://github.com/YJCavalcante))
 
 ## 📄 License
 
