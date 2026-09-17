@@ -74,7 +74,7 @@ class VersionsPage extends Page
 
     // Browsing and filter state
     public string $search           = '';
-    public string $selectedCategory = 'all'; // 'all', 'recommended', 'established', 'experimental', etc.
+    public string $selectedCategory = 'recommended'; // Default to recommended (clean, not crowded)
     public array  $types            = [];
     public ?string $selectedSoftware = null;
     public ?array $softwareDetails  = null;
@@ -84,7 +84,7 @@ class VersionsPage extends Page
     public ?string $selectedVersion    = null;
     public ?array $versionDetails      = null;
     public array  $availableBuilds     = [];
-    public ?int   $selectedBuildNumber = null; // null = latest
+    public string|int|null $selectedBuildNumber = 'latest'; // string or null, default latest
     public ?array $selectedBuild       = null;
 
     public bool $isLoadingVersions = false;
@@ -101,9 +101,14 @@ class VersionsPage extends Page
     public string $changeError  = '';
 
     // Modals
+    public bool   $showInstallModal = false;
     public bool   $showConfirmModal = false;
     public bool   $showLogModal     = false;
     public ?array $viewingRecord    = null;
+
+    // Options
+    public bool   $keepBackup = true;
+    public bool   $acceptEula = true;
 
     // History
     public array $recentChanges = [];
@@ -141,17 +146,6 @@ class VersionsPage extends Page
             $this->changeError  = $activeChange->error_message ?? '';
         }
 
-        // Default to PAPER if available, or first recommended software
-        $defaultSoftware = 'PAPER';
-        if (!isset($this->types['recommended'][$defaultSoftware])) {
-            $recommended = array_keys($this->types['recommended'] ?? []);
-            $defaultSoftware = $recommended[0] ?? null;
-        }
-
-        if ($defaultSoftware) {
-            $this->selectSoftware($defaultSoftware, $mcJarsService);
-        }
-
         $this->loadHistory();
     }
 
@@ -162,10 +156,33 @@ class VersionsPage extends Page
         $this->selectedCategory = $category;
     }
 
-    public function selectSoftware(string $softwareKey, ?McJarsService $mcJarsService = null): void
+    public function openSoftwareModal(string $softwareKey): void
     {
+        $this->selectSoftware($softwareKey, openModal: true);
+    }
+
+    public function closeInstallModal(): void
+    {
+        $this->showInstallModal  = false;
+        $this->availableVersions = [];
+        $this->availableBuilds   = [];
+        $this->selectedBuild     = null;
+    }
+
+    public function selectSoftware(string $softwareKey, bool $openModal = true, ?McJarsService $mcJarsService = null): void
+    {
+        $key = strtoupper(trim($softwareKey));
         $mcJarsService = $mcJarsService ?? app(McJarsService::class);
-        $this->selectedSoftware = strtoupper($softwareKey);
+
+        // If this software is already loaded, open modal directly without redundant API hits
+        if ($this->selectedSoftware === $key && !empty($this->availableVersions)) {
+            if ($openModal) {
+                $this->showInstallModal = true;
+            }
+            return;
+        }
+
+        $this->selectedSoftware = $key;
 
         // Find software details in types list
         $this->softwareDetails = null;
@@ -176,8 +193,20 @@ class VersionsPage extends Page
             }
         }
 
+        if (!$this->softwareDetails) {
+            $this->softwareDetails = [
+                'name'        => ucfirst(strtolower($this->selectedSoftware)),
+                'description' => 'Minecraft server software.',
+                'icon'        => null,
+            ];
+        }
+
         $this->isLoadingVersions = true;
-        $this->availableVersions = $mcJarsService->getVersions($this->selectedSoftware);
+        try {
+            $this->availableVersions = $mcJarsService->getVersions($this->selectedSoftware);
+        } catch (Throwable $e) {
+            $this->availableVersions = [];
+        }
         $this->isLoadingVersions = false;
 
         // Auto-select latest version
@@ -190,34 +219,63 @@ class VersionsPage extends Page
             $this->availableBuilds = [];
             $this->selectedBuild   = null;
         }
+
+        if ($openModal) {
+            $this->showInstallModal = true;
+        }
     }
 
     public function selectVersion(string $version, ?McJarsService $mcJarsService = null): void
     {
+        if (empty($version)) {
+            return;
+        }
+
         $mcJarsService = $mcJarsService ?? app(McJarsService::class);
         $this->selectedVersion = $version;
         $this->versionDetails  = $this->availableVersions[$version] ?? null;
 
         $this->isLoadingBuilds = true;
-        $this->availableBuilds = $mcJarsService->getBuilds($this->selectedSoftware, $version);
+        try {
+            $this->availableBuilds = $mcJarsService->getBuilds($this->selectedSoftware, $version);
+        } catch (Throwable $e) {
+            $this->availableBuilds = [];
+        }
         $this->isLoadingBuilds = false;
 
         // Default to latest build
-        $this->selectBuild(null);
+        $this->selectBuild('latest');
     }
 
-    public function selectBuild(?int $buildNumber): void
+    public function selectBuild(string|int|null $buildNumber): void
     {
-        $this->selectedBuildNumber = $buildNumber;
+        $this->selectedBuildNumber = $buildNumber !== null ? (string) $buildNumber : 'latest';
 
-        if ($buildNumber === null || $buildNumber === 0) {
-            $this->selectedBuild = !empty($this->availableBuilds)
-                ? $this->availableBuilds[0]
-                : ($this->versionDetails['latest'] ?? null);
-        } else {
-            $this->selectedBuild = collect($this->availableBuilds)
-                ->firstWhere('buildNumber', $buildNumber);
+        if (empty($this->availableBuilds)) {
+            $this->selectedBuild = $this->versionDetails['latest'] ?? null;
+            return;
         }
+
+        if ($buildNumber === null || $buildNumber === '' || $buildNumber === '0' || $buildNumber === 0 || $buildNumber === 'latest') {
+            $this->selectedBuild = $this->availableBuilds[0];
+            $this->selectedBuildNumber = 'latest';
+            return;
+        }
+
+        $specialTypes = ['FABRIC', 'FORGE', 'NEOFORGE', 'SPONGE', 'LEGACYFABRIC', 'QUILT'];
+        $isSpecial = in_array(strtoupper($this->selectedSoftware ?? ''), $specialTypes, true);
+
+        $found = collect($this->availableBuilds)->first(function ($b) use ($buildNumber, $isSpecial) {
+            if ($isSpecial && isset($b['name']) && (string) $b['name'] === (string) $buildNumber) {
+                return true;
+            }
+            if (isset($b['buildNumber']) && (string) $b['buildNumber'] === (string) $buildNumber) {
+                return true;
+            }
+            return (string) ($b['name'] ?? '') === (string) $buildNumber;
+        });
+
+        $this->selectedBuild = $found ?? $this->availableBuilds[0];
     }
 
     // ─── Execution ────────────────────────────────────────────────────────────
@@ -311,6 +369,7 @@ class VersionsPage extends Page
         $this->changeStatus     = VersionChange::STATUS_PENDING;
         $this->changeLog        = $record->log;
         $this->changeError      = '';
+        $this->showInstallModal = false;
         $this->showConfirmModal = false;
 
         Notification::make()

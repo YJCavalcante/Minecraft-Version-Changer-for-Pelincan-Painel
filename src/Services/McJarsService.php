@@ -59,7 +59,33 @@ class McJarsService
 
                 if ($response->successful()) {
                     $rawBuilds = (array) ($response->json('builds') ?? []);
-                    return $this->sortVersions($rawBuilds);
+
+                    // Extract lightweight version metadata (matches Pterodactyl VersionController.php)
+                    // Keeps all RELEASE versions and top 25 recent snapshots/experimentals.
+                    // This reduces snapshot size from 1.8MB down to <9KB, preventing Livewire 413/500 errors!
+                    $releases = [];
+                    $snapshots = [];
+
+                    foreach ($rawBuilds as $versionId => $v) {
+                        $meta = [
+                            'type'      => $v['type'] ?? 'RELEASE',
+                            'supported' => (bool) ($v['supported'] ?? true),
+                            'builds'    => (int) ($v['builds'] ?? 0),
+                            'java'      => isset($v['java']) ? (int) $v['java'] : null,
+                        ];
+
+                        if (($v['type'] ?? '') === 'RELEASE') {
+                            $releases[$versionId] = $meta;
+                        } else {
+                            $snapshots[$versionId] = $meta;
+                        }
+                    }
+
+                    // Keep all releases, plus top 25 recent snapshots
+                    $trimmedSnapshots = array_slice($snapshots, 0, 25, true);
+                    $allVersions = $releases + $trimmedSnapshots;
+
+                    return $this->sortVersions($allVersions);
                 }
 
                 Log::warning("[Versions] Failed to fetch versions for {$typeKey}: " . $response->status());
@@ -73,6 +99,7 @@ class McJarsService
 
     /**
      * Get all builds available for a given software type and Minecraft version.
+     * Returns a lightweight array of up to 40 latest builds.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -89,7 +116,30 @@ class McJarsService
                     ->get(self::BASE_URL . "/builds/{$typeKey}/{$mcVer}");
 
                 if ($response->successful()) {
-                    return (array) ($response->json('builds') ?? []);
+                    $rawBuilds = (array) ($response->json('builds') ?? []);
+                    $builds = [];
+
+                    // Keep top 40 latest builds and strip heavy fields (matches Pterodactyl VersionController.php)
+                    $slice = array_slice($rawBuilds, 0, 40);
+                    foreach ($slice as $b) {
+                        $url = $b['jarUrl'] ?? ($b['zipUrl'] ?? null);
+                        if (empty($url) && !empty($b['installation'][0][0]['url'])) {
+                            $url = $b['installation'][0][0]['url'];
+                        }
+
+                        $builds[] = [
+                            'id'           => $b['id'] ?? null,
+                            'name'         => $b['name'] ?? ('#' . ($b['buildNumber'] ?? '')),
+                            'buildNumber'  => isset($b['buildNumber']) ? (string) $b['buildNumber'] : ($b['name'] ?? ''),
+                            'jarUrl'       => $url,
+                            'jarSize'      => isset($b['jarSize']) ? (int) $b['jarSize'] : (isset($b['zipSize']) ? (int) $b['zipSize'] : null),
+                            'created'      => isset($b['created']) ? substr($b['created'], 0, 10) : null,
+                            'experimental' => !empty($b['experimental']),
+                            'changes'      => array_slice($b['changes'] ?? [], 0, 3),
+                        ];
+                    }
+
+                    return $builds;
                 }
 
                 Log::warning("[Versions] Failed to fetch builds for {$typeKey}/{$mcVer}: " . $response->status());
@@ -110,6 +160,9 @@ class McJarsService
     public function resolveJarDetails(array $build): array
     {
         $url = $build['jarUrl'] ?? null;
+        if (empty($url) && !empty($build['zipUrl'])) {
+            $url = $build['zipUrl'];
+        }
         $size = isset($build['jarSize']) ? (int) $build['jarSize'] : null;
 
         if (empty($url) && !empty($build['installation'][0][0]['url'])) {
@@ -121,7 +174,7 @@ class McJarsService
             'url'          => $url,
             'size'         => $size,
             'name'         => $build['name'] ?? ('#' . ($build['buildNumber'] ?? '')),
-            'build_number' => isset($build['buildNumber']) ? (int) $build['buildNumber'] : null,
+            'build_number' => isset($build['buildNumber']) && is_numeric($build['buildNumber']) ? (int) $build['buildNumber'] : null,
         ];
     }
 
