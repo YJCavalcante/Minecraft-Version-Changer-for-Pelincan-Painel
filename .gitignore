@@ -1,0 +1,18 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Temporary & backup files
+*.bak
+*.tmp
+*.log
+
+# Distribution builds (should be uploaded as GitHub Release assets)
+versions.zip
+*.zip
