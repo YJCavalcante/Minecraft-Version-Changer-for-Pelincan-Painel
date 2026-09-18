@@ -141,7 +141,8 @@
                 </button>
             </div>
         </div>
-    
+    @endif
+
     @if($currentVersionInfo)
         <div class="mvc-card rounded-2xl p-4 sm:p-5 shadow-sm">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
