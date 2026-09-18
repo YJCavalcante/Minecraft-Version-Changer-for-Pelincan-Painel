@@ -1,17 +1,17 @@
-# Minecraft Version Changer for Pelican Panel (v1.0.2-beta)
+# Minecraft Version Changer for Pelican Panel (v1.0.3-beta)
 
 [![Pelican Panel](https://img.shields.io/badge/Pelican-Plugin-blue.svg)](https://pelican.dev)
 [![Status](https://img.shields.io/badge/Status-Beta-orange.svg)](#)
-[![Version](https://img.shields.io/badge/Version-1.0.2--beta-green.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.0.3--beta-green.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
 Effortlessly switch your Minecraft server's software and version directly from the Pelican Panel web interface. Fully automated lifecycle management with zero manual SFTP uploads or console commands.
 
 ---
 
-## 🚀 Overview of Version 1.0.2-beta
+## 🚀 Overview of Version 1.0.3-beta
 
-Version **1.0.2-beta** introduces a complete **automated lifecycle engine** and an in-depth **resilience overhaul**, ensuring seamless version transitions, safe server restarts, cross-version dependency cleanup, and native support for both `.jar` and `.zip` distributions.
+Version **1.0.3-beta** introduces **Active Version Detection** (inspired by the Pterodactyl Minecraft pack) and full **Mojang EULA Compliance**, building upon the **6-step automated lifecycle engine** and resilience overhaul. It dynamically detects and displays the currently installed server version with instant Livewire refresh, while maintaining 100% scoped CSS isolation with zero theme interference.
 
 ---
 
@@ -40,8 +40,8 @@ When a version change is initiated, the backend execution service (`VersionChang
 - **Automatic Decompression**: For `.zip` distributions (Forge/NeoForge), it invokes native Wings decompression (`DaemonFileRepository::decompressFile('/', 'server.zip')`) to extract the server bundle into the server root.
 - Automatically removes the temporary `.zip` archive once extraction succeeds.
 
-### 5. 📜 EULA Agreement & Daemon Synchronization (`stepAcceptEula` & `stepSyncEggVariable`)
-- **Auto-Accept EULA**: Writes `eula=true` to `eula.txt` automatically, eliminating first-boot EULA crashes.
+### 5. 📜 EULA Agreement & Daemon Synchronization (`stepHandleEula` & `stepSyncEggVariable`)
+- **Strict Mojang EULA Compliance**: In strict compliance with Mojang's Commercial Usage Guidelines, automatic EULA acceptance is completely removed. The addon detects and preserves any existing `eula=true` agreements on the server, while deferring new agreements to Pelican's native console prompt (`MinecraftEulaSchema`) where server owners explicitly accept the terms on startup.
 - **Egg Variable Synchronization**: Ensures the `SERVER_JARFILE` egg variable is set to `server.jar` and calls `$serverRepo->sync()` to refresh container startup arguments on Wings immediately.
 
 ### 6. 🚀 Automatic Server Reboot (`stepPowerRestart`)
@@ -53,6 +53,9 @@ When a version change is initiated, the backend execution service (`VersionChang
 
 ## 🛠️ Audit & Resilience Improvements
 
+- **Active Version Detection (Pterodactyl-Inspired)**: Automatically resolves the currently active server software and Minecraft version via a multi-level detection pipeline (database history, egg startup variables, and native server configuration files), prominently displaying an active status card at the top of the interface.
+- **Clean Install (Pterodactyl-Inspired)**: Optional toggle in the install modal that wipes all existing server files before installing the new version — ideal for ecosystem migrations (e.g. Vanilla/Paper → Forge/Fabric). Only `server.jar.bak` and `eula.txt` are preserved. Unchecked and safe by default.
+- **Java Compatibility Checker**: Automatically detects the Java version required by the selected Minecraft version (via MCJars API) and compares it against the server's configured Docker image. Displays a clear inline warning in the install modal when a mismatch is detected (e.g. the selected version requires Java 21 but the server image uses Java 17), preventing failed server starts.
 - **Standard Laravel Queue Compatibility**: Configured `ChangeVersionJob` to use Pelican's default queue worker (`config('versions.queue', null)`), ensuring background jobs process immediately on standard installations without requiring dedicated queue worker flags.
 - **Comprehensive Minecraft Server Detection**: Expanded `canAccess()` to recognize community eggs named `Paper`, `Purpur`, `Forge`, `Fabric`, `Spigot`, `Bungee`, `Velocity`, and eggs using `server.jar` in their startup command.
 - **On-Demand Build Resolution**: Added a backend safety fallback in `startVersionChange` to fetch builds directly from the API if rapid user interaction causes state loss during Livewire hydration.
@@ -69,7 +72,6 @@ All behaviors can be customized through environment variables in your Pelican `.
 | :--- | :--- | :--- |
 | `VERSIONS_AUTO_STOP` | `true` | Gracefully shut down running servers before replacing files |
 | `VERSIONS_AUTO_RESTART` | `true` | Automatically reboot the server once the update succeeds |
-| `VERSIONS_AUTO_ACCEPT_EULA` | `true` | Automatically write `eula=true` to `eula.txt` |
 | `VERSIONS_CLEAN_LIBRARIES` | `true` | Wipe `/libraries/` folder to avoid cross-version classpath collisions |
 | `VERSIONS_KEEP_BACKUP` | `true` | Retain previous `server.jar` as `server.jar.bak` |
 | `VERSIONS_DOWNLOAD_TIMEOUT` | `600` | Maximum seconds to wait for Wings to pull and verify files |
@@ -83,7 +85,7 @@ All behaviors can be customized through environment variables in your Pelican `.
 
 ### Method 1: Web Interface (Recommended)
 
-1. Download the latest `versions_v1.0.2-beta.zip` (or `versions.zip`) from the [Releases](https://github.com/YJCavalcante/Minecraft-Version-Changer-for-Pelincan-Painel/releases) page.
+1. Download the latest `versions_v1.0.3-beta.zip` (or `versions.zip`) from the [Releases](https://github.com/YJCavalcante/Minecraft-Version-Changer-for-Pelincan-Painel/releases) page.
 2. Log into your Pelican Panel as an administrator and go to **Admin → Plugins**.
 3. Click **Import from file** in the top right corner.
 4. Upload the zip file.
@@ -93,7 +95,7 @@ All behaviors can be customized through environment variables in your Pelican `.
 
 1. Extract the release archive into your panel plugins directory:
    ```bash
-   unzip versions_v1.0.2-beta.zip -d /var/www/pelican/plugins/versions/
+   unzip versions_v1.0.3-beta.zip -d /var/www/pelican/plugins/versions/
    ```
 2. Set ownership and permissions:
    ```bash

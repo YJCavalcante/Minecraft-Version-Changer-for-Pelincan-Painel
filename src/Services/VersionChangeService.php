@@ -21,11 +21,6 @@ class VersionChangeService
         $this->serverRepo = $serverRepo ?? app(DaemonServerRepository::class);
     }
 
-    /**
-     * Execute the full automated version change workflow on the remote Wings daemon.
-     *
-     * @throws Throwable
-     */
     public function execute(VersionChange $record): void
     {
         $server = $record->server;
@@ -34,28 +29,21 @@ class VersionChangeService
             throw new RuntimeException("Server not found for VersionChange #{$record->id}");
         }
 
-        // Bind daemon repositories to this specific server
         $this->fileRepo->setServer($server);
         $this->serverRepo->setServer($server);
 
         try {
-            // Step 1: Check server state and gracefully stop if running
             $wasRunning = $this->stepPowerStopIfRunning($record);
 
-            // Step 2: Backup previous JAR and clean legacy libraries (/libraries/)
             $this->stepBackupAndClean($record);
 
-            // Step 3: Pull the new JAR or ZIP file
             $isZip = $this->stepDownload($record);
 
-            // Step 4: Verify file integrity and extract if archive
             $this->stepVerifyAndExtract($record, $isZip);
 
-            // Step 5: Auto-accept Minecraft EULA (eula=true) and sync egg startup variable
-            $this->stepAcceptEula($record);
+            $this->stepHandleEula($record);
             $this->stepSyncEggVariable($record, $server);
 
-            // Step 6: Automatically restart server if it was running before
             if ($wasRunning && config('versions.auto_restart_server', true)) {
                 $this->stepPowerRestart($record);
             } else {
@@ -84,9 +72,6 @@ class VersionChangeService
         }
     }
 
-    /**
-     * Step 1: Gracefully stop server if online to prevent file corruption.
-     */
     private function stepPowerStopIfRunning(VersionChange $record): bool
     {
         if (!config('versions.auto_stop_server', true)) {
@@ -109,7 +94,6 @@ class VersionChangeService
                     $record->appendLog("Step 1/6: Server is currently shutting down ({$state}). Waiting for clean stop...");
                 }
 
-                // Wait up to 21 seconds for clean shutdown
                 for ($i = 0; $i < 7; $i++) {
                     sleep(3);
                     try {
@@ -134,9 +118,6 @@ class VersionChangeService
         }
     }
 
-    /**
-     * Step 2: Backup existing server.jar and clean legacy /libraries/ folder.
-     */
     private function stepBackupAndClean(VersionChange $record): void
     {
         $record->appendLog('Step 2/6: Checking existing files and cleaning legacy libraries...');
@@ -148,7 +129,6 @@ class VersionChangeService
                 fn ($e) => ($e['name'] ?? '') === 'server.jar' && !($e['directory'] ?? false)
             );
 
-            // Handle backup / old JAR removal
             if ($hasJar) {
                 if (config('versions.keep_backup', true)) {
                     $hasOldBak = collect($entries)->contains(
@@ -173,7 +153,6 @@ class VersionChangeService
                 $record->appendLog('  No existing server.jar found; skipping backup.');
             }
 
-            // Clean legacy /libraries/ folder to avoid Minecraft version class conflicts
             if (config('versions.clean_libraries', true)) {
                 $hasLibraries = collect($entries)->contains(
                     fn ($e) => ($e['name'] ?? '') === 'libraries' && ($e['directory'] ?? false)
@@ -184,16 +163,37 @@ class VersionChangeService
                     $record->appendLog('  Removed old /libraries/ directory to prevent dependency collisions.');
                 }
             }
+
+            if ($record->clean_install) {
+                $record->appendLog('  [CLEAN INSTALL] Wiping server root files...');
+
+                $currentEntries = (array) $this->fileRepo->getDirectory('/');
+
+                $preserved = ['server.jar.bak', 'eula.txt'];
+                $toDelete   = [];
+
+                foreach ($currentEntries as $entry) {
+                    $name = $entry['name'] ?? '';
+                    if (empty($name) || in_array($name, $preserved, true)) {
+                        continue;
+                    }
+                    $toDelete[] = $name;
+                }
+
+                if (!empty($toDelete)) {
+                    foreach (array_chunk($toDelete, 100) as $chunk) {
+                        $this->fileRepo->deleteFiles('/', $chunk);
+                    }
+                    $record->appendLog('  [CLEAN INSTALL] Deleted ' . count($toDelete) . ' items from server root.');
+                } else {
+                    $record->appendLog('  [CLEAN INSTALL] Server root is already empty.');
+                }
+            }
         } catch (Throwable $e) {
             throw new RuntimeException('Backup/Clean step failed: ' . $e->getMessage(), 0, $e);
         }
     }
 
-    /**
-     * Step 3: Instruct Wings daemon to pull the new JAR or ZIP file.
-     *
-     * @return bool True if downloading a ZIP archive, false for JAR
-     */
     private function stepDownload(VersionChange $record): bool
     {
         $urlPath = parse_url($record->jar_url, PHP_URL_PATH) ?? '';
@@ -214,7 +214,6 @@ class VersionChangeService
             throw new RuntimeException("Failed to send download command to Wings: {$e->getMessage()}", 0, $e);
         }
 
-        // Wait for download to finish by monitoring file presence and size stabilization
         $timeout = (int) config('versions.download_timeout', 600);
         $deadline = time() + $timeout;
         $lastSize = -1;
@@ -234,7 +233,6 @@ class VersionChangeService
                 continue;
             }
 
-            // If target size is known and exact match is reached
             if ($record->jar_size && $size === (int) $record->jar_size) {
                 $record->appendLog('  Download complete: ' . $this->humanBytes($size) . ' (100%)');
                 break;
@@ -263,9 +261,6 @@ class VersionChangeService
         return $isZip;
     }
 
-    /**
-     * Step 4: Verify the downloaded file integrity and extract if archive.
-     */
     private function stepVerifyAndExtract(VersionChange $record, bool $isZip): void
     {
         $filename = $isZip ? 'server.zip' : 'server.jar';
@@ -289,7 +284,6 @@ class VersionChangeService
             $record->appendLog('  File size verified: ' . $this->humanBytes($actual));
         }
 
-        // If this was a zip distribution, decompress into root directory
         if ($isZip) {
             $record->appendLog('  Extracting server.zip archive to root directory...');
             try {
@@ -306,32 +300,22 @@ class VersionChangeService
         }
     }
 
-    /**
-     * Step 5: Automatically accept Minecraft EULA (eula=true).
-     */
-    private function stepAcceptEula(VersionChange $record): void
+    private function stepHandleEula(VersionChange $record): void
     {
-        if (!config('versions.auto_accept_eula', true)) {
-            return;
-        }
-
-        $record->appendLog('Step 5/6: Ensuring Minecraft EULA agreement (eula=true)...');
+        $record->appendLog('Step 5/6: Verifying Minecraft EULA status...');
 
         try {
-            $eulaContent = "# By changing the setting below you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).
-# Automatically managed by Minecraft Version Changer
-eula=true
-";
-            $this->fileRepo->putContent('eula.txt', $eulaContent);
-            $record->appendLog('  Wrote eula=true to eula.txt.');
-        } catch (Throwable $e) {
-            $record->appendLog('  Notice: Could not write eula.txt: ' . $e->getMessage());
+            $content = $this->fileRepo->getContent('eula.txt', 2048);
+            if (str_contains($content, 'eula=true')) {
+                $record->appendLog('  Existing Minecraft EULA agreement detected and preserved.');
+                return;
+            }
+        } catch (Throwable) {
         }
+
+        $record->appendLog('  Notice: Minecraft EULA is handled via Pelican native prompt on startup.');
     }
 
-    /**
-     * Step 5 (part 2): Ensure SERVER_JARFILE egg variable is aligned.
-     */
     private function stepSyncEggVariable(VersionChange $record, Server $server): void
     {
         try {
@@ -348,13 +332,9 @@ eula=true
                 } catch (Throwable) {}
             }
         } catch (Throwable) {
-            // Non-critical; ignore if egg doesn't define this variable
         }
     }
 
-    /**
-     * Step 6: Automatically restart the server if it was running before the change.
-     */
     private function stepPowerRestart(VersionChange $record): void
     {
         $record->appendLog('Step 6/6: Automatically restarting server with the new version...');
@@ -367,9 +347,6 @@ eula=true
         }
     }
 
-    /**
-     * Helper to retrieve remote file size from directory listing.
-     */
     private function getRemoteFileSize(string $filename): ?int
     {
         try {
@@ -384,9 +361,6 @@ eula=true
         return null;
     }
 
-    /**
-     * Helper to format bytes into human-readable size.
-     */
     private function humanBytes(int $bytes): string
     {
         if ($bytes >= 1024 * 1024 * 1024) {

@@ -2,7 +2,7 @@
     "id": "versions",
     "name": "Minecraft Version Changer",
     "author": "yuri.j.cavalcante",
-    "version": "1.0.2-beta",
+    "version": "1.0.3-beta",
     "description": "Change the Minecraft server JAR directly from the panel UI. Supports all software types provided by MCJars (Vanilla, Paper, Purpur, Fabric, Forge, NeoForge, Folia, Spigot, Quilt, and many more).",
     "update_url": null,
     "category": "plugin",

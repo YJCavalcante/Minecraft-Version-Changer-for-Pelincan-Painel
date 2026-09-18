@@ -11,12 +11,6 @@ class McJarsService
 {
     private const BASE_URL = 'https://versions.mcjars.app/api/v2';
 
-    /**
-     * Get all available software types grouped by category.
-     * Categories include: recommended, established, experimental, miscellaneous, limbos.
-     *
-     * @return array<string, array<string, array<string, mixed>>>
-     */
     public function getTypes(): array
     {
         $ttl = (int) config('versions.api_cache_ttl', 300);
@@ -40,12 +34,6 @@ class McJarsService
         });
     }
 
-    /**
-     * Get all Minecraft versions available for a given software type.
-     * Returns an array keyed by version ID with version metadata, sorted from newest to oldest.
-     *
-     * @return array<string, array<string, mixed>>
-     */
     public function getVersions(string $type): array
     {
         $typeKey = strtoupper(trim($type));
@@ -60,9 +48,6 @@ class McJarsService
                 if ($response->successful()) {
                     $rawBuilds = (array) ($response->json('builds') ?? []);
 
-                    // Extract lightweight version metadata (matches Pterodactyl VersionController.php)
-                    // Keeps all RELEASE versions and top 25 recent snapshots/experimentals.
-                    // This reduces snapshot size from 1.8MB down to <9KB, preventing Livewire 413/500 errors!
                     $releases = [];
                     $snapshots = [];
 
@@ -81,7 +66,6 @@ class McJarsService
                         }
                     }
 
-                    // Keep all releases, plus top 25 recent snapshots
                     $trimmedSnapshots = array_slice($snapshots, 0, 25, true);
                     $allVersions = $releases + $trimmedSnapshots;
 
@@ -97,12 +81,6 @@ class McJarsService
         });
     }
 
-    /**
-     * Get all builds available for a given software type and Minecraft version.
-     * Returns a lightweight array of up to 40 latest builds.
-     *
-     * @return array<int, array<string, mixed>>
-     */
     public function getBuilds(string $type, string $mcVersion): array
     {
         $typeKey = strtoupper(trim($type));
@@ -119,7 +97,6 @@ class McJarsService
                     $rawBuilds = (array) ($response->json('builds') ?? []);
                     $builds = [];
 
-                    // Keep top 40 latest builds and strip heavy fields (matches Pterodactyl VersionController.php)
                     $slice = array_slice($rawBuilds, 0, 40);
                     foreach ($slice as $b) {
                         $url = $b['jarUrl'] ?? ($b['zipUrl'] ?? null);
@@ -151,12 +128,6 @@ class McJarsService
         });
     }
 
-    /**
-     * Resolve the direct download URL and size from a build payload.
-     *
-     * @param array<string, mixed> $build
-     * @return array{url: ?string, size: ?int, name: ?string, build_number: ?int}
-     */
     public function resolveJarDetails(array $build): array
     {
         $url = $build['jarUrl'] ?? null;
@@ -178,16 +149,9 @@ class McJarsService
         ];
     }
 
-    /**
-     * Sort versions semantically from newest to oldest.
-     *
-     * @param array<string, mixed> $versions
-     * @return array<string, mixed>
-     */
     private function sortVersions(array $versions): array
     {
         uksort($versions, function (string $a, string $b): int {
-            // Clean versions for comparison (e.g. 1.21.4 vs 1.20.1)
             $cleanA = trim((string) preg_replace('/[^0-9.]/', '', $a), '.');
             $cleanB = trim((string) preg_replace('/[^0-9.]/', '', $b), '.');
 

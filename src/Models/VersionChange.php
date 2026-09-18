@@ -7,22 +7,6 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/**
- * @property int $id
- * @property int $server_id
- * @property string $software
- * @property string $minecraft_version
- * @property int|null $build_number
- * @property string|null $build_name
- * @property string $jar_url
- * @property int|null $jar_size
- * @property string $status
- * @property string|null $error_message
- * @property string|null $log
- * @property CarbonImmutable|null $created_at
- * @property CarbonImmutable|null $updated_at
- * @property-read Server $server
- */
 class VersionChange extends Model
 {
     public const STATUS_PENDING  = 'pending';
@@ -37,11 +21,12 @@ class VersionChange extends Model
     protected function casts(): array
     {
         return [
-            'server_id'   => 'integer',
-            'build_number'=> 'integer',
-            'jar_size'    => 'integer',
-            'created_at'  => 'immutable_datetime',
-            'updated_at'  => 'immutable_datetime',
+            'server_id'     => 'integer',
+            'build_number'  => 'integer',
+            'jar_size'      => 'integer',
+            'clean_install' => 'boolean',
+            'created_at'    => 'immutable_datetime',
+            'updated_at'    => 'immutable_datetime',
         ];
     }
 

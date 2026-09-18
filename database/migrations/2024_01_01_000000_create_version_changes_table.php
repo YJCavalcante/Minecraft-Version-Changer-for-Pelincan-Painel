@@ -15,13 +15,14 @@ return new class extends Migration
         Schema::create('version_changes', function (Blueprint $table) {
             $table->id();
             $table->unsignedInteger('server_id')->index();
-            $table->string('software');              // e.g. PAPER, VANILLA, FABRIC
-            $table->string('minecraft_version');     // e.g. 1.21.4
+            $table->string('software');
+            $table->string('minecraft_version');
             $table->unsignedInteger('build_number')->nullable();
-            $table->string('build_name')->nullable();// e.g. "#232" or "0.19.5"
+            $table->string('build_name')->nullable();
             $table->text('jar_url');
             $table->unsignedBigInteger('jar_size')->nullable();
-            $table->string('status')->default('pending'); // pending|changing|done|failed
+            $table->string('status')->default('pending');
+            $table->boolean('clean_install')->default(false);
             $table->text('error_message')->nullable();
             $table->longText('log')->nullable();
             $table->timestamps();
@@ -37,6 +38,5 @@ return new class extends Migration
 
     public function down(): void
     {
-        // Intentionally left empty to prevent data loss on reinstall.
     }
 };

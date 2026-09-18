@@ -15,7 +15,6 @@ class VersionsPlugin implements Plugin
 
     public function register(Panel $panel): void
     {
-        // Register custom permission 'versions.change'
         Subuser::registerCustomPermissions(
             'versions',
             ['change'],

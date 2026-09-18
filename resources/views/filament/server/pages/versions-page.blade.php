@@ -1,7 +1,4 @@
 <x-filament-panels::page>
-{{-- ═══════════════════════════════════════════════════════════════════════════
-     Minecraft Version Changer — Server Panel Page
-     ═══════════════════════════════════════════════════════════════════════════ --}}
 
 <style>
     .mvc {
@@ -68,7 +65,7 @@
 
 <div class="mvc space-y-6" @if($isChanging) wire:poll.2000ms="pollProgress" @endif>
 
-    {{-- ── 1. SERVER RUNNING ALERT ───────────────────────────────────────────── --}}
+    
     @if($this->isServerRunning())
         <div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200">
             <div class="flex items-center gap-3">
@@ -83,7 +80,7 @@
         </div>
     @endif
 
-    {{-- ── 2. ACTIVE PROGRESS PANEL (WHEN CHANGING) ────────────────────────── --}}
+    
     @if($isChanging || ($changeId && $changeStatus === 'changing') || ($changeId && $changeStatus === 'pending'))
         <div class="mvc-card rounded-2xl p-6 shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 dark:border-gray-800 pb-4">
@@ -106,7 +103,7 @@
                 </div>
             </div>
 
-            {{-- Terminal execution log --}}
+            
             <div class="mt-4">
                 <div class="mvc-terminal rounded-xl p-4 text-xs h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed border border-gray-800 shadow-inner">
 {{ $changeLog ?: 'Connecting to Wings node daemon...' }}
@@ -144,11 +141,48 @@
                 </button>
             </div>
         </div>
+    
+    @if($currentVersionInfo)
+        <div class="mvc-card rounded-2xl p-4 sm:p-5 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div class="flex items-center gap-3.5">
+                    <div class="h-11 w-11 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-500 flex items-center justify-center text-xl shrink-0">
+                        ⚡
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                Current Installed Version
+                            </span>
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                Active
+                            </span>
+                        </div>
+                        <div class="flex items-baseline gap-2 mt-0.5">
+                            <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white">
+                                {{ $currentVersionInfo['software'] }} <span class="text-blue-600 dark:text-blue-400">{{ $currentVersionInfo['version'] }}</span>
+                            </h3>
+                            @if(!empty($currentVersionInfo['build']))
+                                <span class="text-xs font-mono text-gray-500 dark:text-gray-400">({{ $currentVersionInfo['build'] }})</span>
+                            @endif
+                        </div>
+                    </div>
+                </div>
+
+                @if(!empty($currentVersionInfo['installed_at']))
+                    <div class="text-left sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-gray-100 dark:border-gray-800">
+                        <span class="text-[11px] text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Installed</span>
+                        <span class="text-xs font-medium text-gray-700 dark:text-gray-300">{{ $currentVersionInfo['installed_at'] }}</span>
+                    </div>
+                @endif
+            </div>
+        </div>
     @endif
 
-    {{-- ── 3. SOFTWARE CATALOG (FULL WIDTH) ─────────────────────────────────── --}}
+    
     <div class="space-y-4">
-        {{-- Category Filter Pills & Search --}}
+        
         <div class="mvc-card rounded-2xl p-4 space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <h2 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -158,7 +192,7 @@
                     Software Catalog
                 </h2>
 
-                {{-- Search Input --}}
+                
                 <div class="relative w-full sm:w-64">
                     <input
                         type="text"
@@ -172,7 +206,7 @@
                 </div>
             </div>
 
-            {{-- Categories tabs --}}
+            
             <div class="flex flex-wrap gap-1.5 border-t border-gray-200 dark:border-gray-800 pt-3">
                 @php
                     $categories = [
@@ -196,7 +230,7 @@
             </div>
         </div>
 
-        {{-- Softwares List / Cards Grid (2 Columns) --}}
+        
         <div class="space-y-6">
             @php $filteredGroup = $this->filteredTypes; @endphp
 
@@ -220,7 +254,7 @@
                                     wire:loading.attr="disabled"
                                     class="mvc-card text-left p-4 rounded-2xl flex items-start gap-3.5 transition-all hover:border-blue-500/50 hover:bg-gray-50 dark:hover:bg-gray-800/60 {{ $isActive ? 'mvc-card-active ring-1 ring-blue-500' : '' }}"
                                 >
-                                    {{-- Software Icon --}}
+                                    
                                     @if(!empty($software['icon']))
                                         <img
                                             src="{{ $software['icon'] }}"
@@ -264,7 +298,7 @@
         </div>
     </div>
 
-    {{-- ── 4. INSTALL MODAL (LIKE PTERODACTYL VERSIONMODAL) ─────────────────── --}}
+    
     @if($showInstallModal && $selectedSoftware && $softwareDetails)
         <div
             x-data="{ closing: false }"
@@ -273,7 +307,7 @@
             @click.self="closing = true; $wire.closeInstallModal()"
         >
             <div class="mvc-card rounded-3xl p-6 sm:p-7 max-w-lg w-full shadow-2xl border border-gray-200 dark:border-gray-700 space-y-5 bg-white dark:bg-gray-900 animate-in fade-in zoom-in-95">
-                {{-- Modal Header --}}
+                
                 <div class="flex items-start justify-between border-b border-gray-200 dark:border-gray-800 pb-4">
                     <div class="flex items-center gap-3.5">
                         @if(!empty($softwareDetails['icon']))
@@ -298,9 +332,9 @@
                     </button>
                 </div>
 
-                {{-- Modal Form Content --}}
+                
                 <div class="space-y-4 text-xs">
-                    {{-- Step 1: Minecraft Version --}}
+                    
                     <div class="space-y-1.5">
                         <label class="block font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
                             1. Minecraft Version
@@ -319,18 +353,48 @@
                                 No versions available for this software.
                             </div>
                         @else
-                            <select
-                                wire:change="selectVersion($event.target.value)"
-                                class="w-full text-xs font-semibold rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white p-3 focus:ring-2 focus:ring-blue-500 outline-none transition"
-                            >
-                                @foreach($availableVersions as $vKey => $vData)
-                                    <option value="{{ $vKey }}" @selected($selectedVersion === $vKey)>
-                                        Minecraft {{ $vKey }} @if(!empty($vData['type']) && $vData['type'] !== 'RELEASE') ({{ $vData['type'] }}) @endif
-                                    </option>
-                                @endforeach
-                            </select>
+                            
+                            @php
+                                $search = strtolower(trim($versionSearch));
+                                $filteredVersions = empty($search)
+                                    ? $availableVersions
+                                    : array_filter(
+                                        $availableVersions,
+                                        fn($k) => str_contains(strtolower((string)$k), $search),
+                                        ARRAY_FILTER_USE_KEY
+                                    );
+                            @endphp
 
-                            {{-- Version Metadata Tags --}}
+                            <div class="relative">
+                                <input
+                                    type="text"
+                                    wire:model.live.debounce.150ms="versionSearch"
+                                    placeholder="Filter versions... (e.g. 1.20.4)"
+                                    class="w-full text-xs rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white px-3 py-2 pl-8 focus:ring-2 focus:ring-blue-500 focus:outline-none transition mb-1.5"
+                                >
+                                <svg class="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                            </div>
+
+                            @if(empty($filteredVersions))
+                                <div class="text-xs text-gray-400 py-1.5 pl-1">
+                                    No versions match "{{ $versionSearch }}".
+                                </div>
+                            @else
+                                <select
+                                    wire:change="selectVersion($event.target.value)"
+                                    class="w-full text-xs font-semibold rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white p-3 focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                >
+                                    @foreach($filteredVersions as $vKey => $vData)
+                                        <option value="{{ $vKey }}" @selected($selectedVersion === $vKey)>
+                                            Minecraft {{ $vKey }} @if(!empty($vData['type']) && $vData['type'] !== 'RELEASE') ({{ $vData['type'] }}) @endif
+                                        </option>
+                                    @endforeach
+                                </select>
+                            @endif
+
+                            
                             @if($versionDetails)
                                 <div class="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
                                     @if(isset($versionDetails['supported']))
@@ -353,7 +417,7 @@
                         @endif
                     </div>
 
-                    {{-- Step 2: JAR Build --}}
+                    
                     <div class="space-y-1.5">
                         <label class="block font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
                             2. JAR Build
@@ -400,7 +464,25 @@
                         @endif
                     </div>
 
-                    {{-- Safety & Configuration details --}}
+                    
+                    @if(!empty($javaWarning))
+                        <div class="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3.5 text-xs flex items-start gap-2.5">
+                            <span class="shrink-0 text-base mt-0.5">☕</span>
+                            <div class="space-y-0.5">
+                                <p class="font-semibold text-amber-800 dark:text-amber-200">Java Compatibility Warning</p>
+                                <p class="text-amber-700 dark:text-amber-300">
+                                    Minecraft {{ $javaWarning['version'] }} requires
+                                    <strong>Java {{ $javaWarning['required'] }}</strong>, but your server image
+                                    is configured with <strong>Java {{ $javaWarning['detected'] }}</strong>.
+                                </p>
+                                <p class="text-amber-600 dark:text-amber-400 mt-1">
+                                    You may need to update your server's Docker image before starting the server.
+                                </p>
+                            </div>
+                        </div>
+                    @endif
+
+                    
                     <div class="rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 p-3.5 space-y-2 text-xs text-gray-600 dark:text-gray-300">
                         <div class="flex items-center gap-2">
                             <span class="text-emerald-500 font-bold">✓</span>
@@ -408,12 +490,38 @@
                         </div>
                         <div class="flex items-center gap-2">
                             <span class="text-emerald-500 font-bold">✓</span>
-                            <span>Accepts Minecraft EULA (<code class="text-gray-800 dark:text-gray-200">eula=true</code>)</span>
+                            <span>Preserves Minecraft EULA agreement (<code class="text-gray-800 dark:text-gray-200">eula.txt</code>)</span>
                         </div>
                         @if(!empty($selectedBuild['jarSize']))
                             <div class="flex items-center gap-2">
                                 <span class="text-blue-500 font-bold">📦</span>
                                 <span>Download Size: ~{{ round($selectedBuild['jarSize'] / (1024 * 1024), 1) }} MB</span>
+                            </div>
+                        @endif
+                    </div>
+
+                    
+                    <div class="rounded-xl border {{ $cleanInstall ? 'border-red-400/50 bg-red-500/5' : 'border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50' }} p-3.5 text-xs transition-colors">
+                        <label class="flex items-start gap-2.5 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                wire:model.live="cleanInstall"
+                                class="mt-0.5 rounded border-gray-400 text-red-500 focus:ring-red-400 cursor-pointer shrink-0"
+                            >
+                            <div>
+                                <span class="font-semibold {{ $cleanInstall ? 'text-red-700 dark:text-red-400' : 'text-gray-700 dark:text-gray-300' }}">
+                                    Clean Install — Delete all server files before installing
+                                </span>
+                                <p class="mt-0.5 text-gray-500 dark:text-gray-400">
+                                    Useful when migrating between ecosystems (e.g. Vanilla → Forge). Unchecked by default.
+                                </p>
+                            </div>
+                        </label>
+
+                        @if($cleanInstall)
+                            <div class="mt-2.5 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5 flex items-start gap-2 text-red-800 dark:text-red-300">
+                                <span class="shrink-0 mt-0.5">⚠️</span>
+                                <span class="font-medium">This is irreversible. All world data, plugins, mods, configs and server files will be permanently deleted before the new version is installed. Only <code class="font-mono">server.jar.bak</code> and <code class="font-mono">eula.txt</code> will be preserved.</span>
                             </div>
                         @endif
                     </div>
@@ -428,7 +536,7 @@
                     @endif
                 </div>
 
-                {{-- Modal Footer Actions --}}
+                
                 <div class="flex items-center justify-end gap-3 pt-3 border-t border-gray-200 dark:border-gray-800">
                     <button
                         type="button"
@@ -459,7 +567,7 @@
         </div>
     @endif
 
-    {{-- ── 4. VERSION CHANGE HISTORY ────────────────────────────────────────── --}}
+    
     @if(!empty($recentChanges))
         <div class="mvc-card rounded-2xl p-6 shadow-sm space-y-4">
             <h3 class="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -524,7 +632,7 @@
         </div>
     @endif
 
-    {{-- ── 5. CONFIRMATION MODAL ────────────────────────────────────────────── --}}
+    
     @if($showConfirmModal)
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" wire:click.self="closeConfirmModal">
             <div class="mvc-card rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-300 dark:border-gray-700 space-y-5 bg-white dark:bg-gray-900">
@@ -585,7 +693,7 @@
         </div>
     @endif
 
-    {{-- ── 6. HISTORICAL LOG MODAL ─────────────────────────────────────────── --}}
+    
     @if($showLogModal && $viewingRecord)
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" wire:click.self="closeLogModal">
             <div class="mvc-card rounded-2xl p-6 max-w-2xl w-full shadow-2xl border border-gray-300 dark:border-gray-700 space-y-4 bg-white dark:bg-gray-900">

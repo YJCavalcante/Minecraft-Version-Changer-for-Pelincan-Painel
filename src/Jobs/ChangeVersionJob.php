@@ -16,8 +16,8 @@ class ChangeVersionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $timeout = 3600; // 1 hour maximum
-    public int $tries   = 1;    // No retries; operation is stateful
+    public int $timeout = 3600;
+    public int $tries   = 1;
 
     public function __construct(
         public readonly int $changeRecordId
