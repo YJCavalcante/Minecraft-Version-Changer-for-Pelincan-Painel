@@ -1,65 +1,68 @@
-# Minecraft Version Changer for Pelican Panel (v1.0.3-beta)
+# Minecraft Version Changer for Pelican Panel (v1.1.0-beta)
 
-[![Pelican Panel](https://img.shields.io/badge/Pelican-Plugin-blue.svg)](https://pelican.dev)
-[![Status](https://img.shields.io/badge/Status-Beta-orange.svg)](#)
-[![Version](https://img.shields.io/badge/Version-1.0.3--beta-green.svg)](#)
-[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
-
-Effortlessly switch your Minecraft server's software and version directly from the Pelican Panel web interface. Fully automated lifecycle management with zero manual SFTP uploads or console commands.
+Effortlessly switch your Minecraft server's software and version directly from the Pelican Panel web interface. Featuring dynamic egg variable synchronization, multi-tier real-time software detection, automated lifecycle orchestration, and zero theme interference.
 
 ---
 
-## 🚀 Overview of Version 1.0.3-beta
+## 🚀 Highlights of Version 1.1.0-beta
 
-Version **1.0.3-beta** introduces **Active Version Detection** (inspired by the Pterodactyl Minecraft pack) and full **Mojang EULA Compliance**, building upon the **6-step automated lifecycle engine** and resilience overhaul. It dynamically detects and displays the currently installed server version with instant Livewire refresh, while maintaining 100% scoped CSS isolation with zero theme interference.
+Version **1.1.0-beta** brings major stability and intelligence upgrades over previous versions:
 
----
-
-## ⚡ 6-Step Automated Lifecycle Engine
-
-When a version change is initiated, the backend execution service (`VersionChangeService`) orchestrates a 6-stage automated workflow:
-
-### 1. 🛑 Graceful Power Management (`stepPowerStopIfRunning`)
-- Inspects the live container state via the Wings daemon.
-- If the server is `running`, `starting`, or `restarting`, it sends a graceful `power('stop')` signal to save world data and flush chunks.
-- Actively polls the container state up to 21 seconds (handling Docker `stopping`, `offline`, and `exited` states).
-- If the server is already in the process of `stopping`, it waits for completion without sending redundant signals.
-
-### 2. 💾 Safety Backup & Dependency Cleaning (`stepBackupAndClean`)
-- **Safety Backup**: Renames the existing `server.jar` to `server.jar.bak` (configurable via `VERSIONS_KEEP_BACKUP`).
-- **Clean Removal Fallback**: If backups are disabled, it deletes the previous `server.jar` so size monitoring never reads obsolete file data.
-- **Dependency Purge**: Automatically wipes the legacy `/libraries/` folder to prevent classpath collisions and fatal crashes caused by incompatible Java libraries between Minecraft versions.
-
-### 3. 📦 Daemon-Direct Download & ZIP Handling (`stepDownload`)
-- Triggers an asynchronous HTTP pull directly on the Wings daemon (`foreground => false`), bypassing PHP web server timeouts.
-- **Archive Detection**: Automatically detects whether the upstream distribution from MCJars is a standard `.jar` or a `.zip` archive (e.g., Forge and NeoForge server bundles `server.jar.zip`).
-- **Stabilization Polling**: Monitors download progress by reading remote file size increments without log spamming.
-
-### 4. 🔍 Integrity Verification & Auto-Extraction (`stepVerifyAndExtract`)
-- Verifies downloaded file existence and checks file size against expected upstream bytes (with 1% tolerance for compression and header differences).
-- **Automatic Decompression**: For `.zip` distributions (Forge/NeoForge), it invokes native Wings decompression (`DaemonFileRepository::decompressFile('/', 'server.zip')`) to extract the server bundle into the server root.
-- Automatically removes the temporary `.zip` archive once extraction succeeds.
-
-### 5. 📜 EULA Agreement & Daemon Synchronization (`stepHandleEula` & `stepSyncEggVariable`)
-- **Strict Mojang EULA Compliance**: In strict compliance with Mojang's Commercial Usage Guidelines, automatic EULA acceptance is completely removed. The addon detects and preserves any existing `eula=true` agreements on the server, while deferring new agreements to Pelican's native console prompt (`MinecraftEulaSchema`) where server owners explicitly accept the terms on startup.
-- **Egg Variable Synchronization**: Ensures the `SERVER_JARFILE` egg variable is set to `server.jar` and calls `$serverRepo->sync()` to refresh container startup arguments on Wings immediately.
-
-### 6. 🚀 Automatic Server Reboot (`stepPowerRestart`)
-- If the server was running before the change began, the addon automatically sends `power('start')` to Wings.
-- The server boots up immediately on the newly installed version with zero manual intervention required.
-- If the server was offline, it remains offline and ready to start.
+* **🔄 Dynamic `SERVER_JARFILE` Synchronization**: Automatically queries the server's Egg configuration to identify the target executable variable (`SERVER_JARFILE`, `JARFILE`, etc.). Downloads directly to the required filename and, for zipped distributions (Forge/NeoForge), extracts and renames the launch JAR automatically, instantly synchronizing container startup arguments with Wings.
+* **🔍 Multi-Tier Real-Time Detection**: Automatically recognizes server software changes made outside the plugin — including **Modpack Manager** installations (`modpack_installs` and `/.modpack-manager.json`), server root disk fingerprints (`unix_args.txt`, `run.sh`, `mohist.yml`, `purpur.yml`, `magma.yml`, `arclight.conf`, `paper.yml`, `fabric-server-launch.jar`), and startup environment variables (`MOHIST_VERSION`, etc.). No more displaying "Vanilla" when running Forge or Fabric!
+* **⚡ Network & Livewire Hardening**:
+  - Removed synchronous remote update checks (`"update_url": null`), completely eliminating the 5-second cURL timeout freezes (`cURL error 28: Operation timed out after 5002ms`) common on VPS environments with unrouted IPv6.
+  - Eliminated circular `$this->dispatch()` loops and isolated polling to prevent Livewire `TooManyCallsException` (199 calls exceeding the 50-call limit).
+  - Enforced input debouncing (`debounce.250ms`) across all search filters.
+* **🎨 Scoped Full-Viewport Modal**: Guaranteed full-screen modal overlay (`inset: 0 !important; z-index: 99999 !important; backdrop-filter: blur(4px)`) completely isolated under the `.mvc` CSS namespace, preventing clipping under custom panel layouts or third-party themes.
+* **🧹 Strict Zero-Comment Codebase**: 100% clean production code across all PHP, Blade, and CSS files.
 
 ---
 
-## 🛠️ Audit & Resilience Improvements
+## Automated Lifecycle Engine
 
-- **Active Version Detection (Pterodactyl-Inspired)**: Automatically resolves the currently active server software and Minecraft version via a multi-level detection pipeline (database history, egg startup variables, and native server configuration files), prominently displaying an active status card at the top of the interface.
-- **Clean Install (Pterodactyl-Inspired)**: Optional toggle in the install modal that wipes all existing server files before installing the new version — ideal for ecosystem migrations (e.g. Vanilla/Paper → Forge/Fabric). Only `server.jar.bak` and `eula.txt` are preserved. Unchecked and safe by default.
-- **Java Compatibility Checker**: Automatically detects the Java version required by the selected Minecraft version (via MCJars API) and compares it against the server's configured Docker image. Displays a clear inline warning in the install modal when a mismatch is detected (e.g. the selected version requires Java 21 but the server image uses Java 17), preventing failed server starts.
+When a version change is initiated, the backend execution service (`VersionChangeService`) orchestrates an automated workflow:
+
+* **Graceful Power Management (`stepPowerStopIfRunning`)**
+  - Inspects live container state via the Wings daemon.
+  - If the server is `running`, `starting`, or `restarting`, it sends a graceful `power('stop')` signal to save world data and flush chunks.
+  - Actively polls the container state up to 21 seconds (handling Docker `stopping`, `offline`, and `exited` states).
+  - If the server is already in the process of `stopping`, it waits for completion without sending redundant signals.
+
+* **Safety Backup & Dependency Cleaning (`stepBackupAndClean`)**
+  - **Safety Backup**: Renames the existing executable to `server.jar.bak` (configurable via `VERSIONS_KEEP_BACKUP`).
+  - **Clean Removal Fallback**: If backups are disabled, it deletes the previous JAR so size monitoring never reads obsolete file data.
+  - **Dependency Purge**: Automatically wipes the legacy `/libraries/` folder to prevent classpath collisions and fatal crashes caused by incompatible Java libraries between Minecraft versions.
+
+* **Daemon-Direct Download & ZIP Handling (`stepDownload`)**
+  - Triggers an asynchronous HTTP pull directly on the Wings daemon (`foreground => false`), bypassing PHP web server timeouts.
+  - **Dynamic File Naming**: Uses the exact filename configured in the server's egg variables (e.g. `server.jar`, `custom.jar`).
+  - **Archive Detection**: Automatically detects whether the upstream distribution from MCJars is a standard `.jar` or a `.zip` archive (e.g., Forge and NeoForge server bundles `server.jar.zip`).
+  - **Stabilization Polling**: Monitors download progress by reading remote file size increments without log spamming.
+
+* **Integrity Verification & Auto-Extraction (`stepVerifyAndExtract`)**
+  - Verifies downloaded file existence and checks file size against expected upstream bytes (with 1% tolerance for compression and header differences).
+  - **Automatic Decompression**: For `.zip` distributions (Forge/NeoForge), it invokes native Wings decompression (`DaemonFileRepository::decompressFile('/', 'server.zip')`) to extract the server bundle into the server root.
+  - **Launch JAR Alignment**: Automatically renames the extracted loader JAR to the egg's expected executable name and purges the temporary `.zip` archive.
+
+* **EULA Agreement & Daemon Synchronization (`stepHandleEula` & `stepSyncEggVariable`)**
+  - **Strict Mojang EULA Compliance**: In strict compliance with Mojang's Commercial Usage Guidelines, automatic EULA acceptance is completely removed. The addon detects and preserves any existing `eula=true` agreements on the server, while deferring new agreements to Pelican's native console prompt (`MinecraftEulaSchema`) where server owners explicitly accept the terms on startup.
+  - **Egg Variable Synchronization**: Ensures the egg executable variable is set to the target filename and calls `$serverRepo->sync()` to refresh container startup arguments on Wings immediately.
+
+* **Automatic Server Reboot (`stepPowerRestart`)**
+  - If the server was running before the change began, the addon automatically sends `power('start')` to Wings.
+  - The server boots up immediately on the newly installed version with zero manual intervention required.
+  - If the server was offline, it remains offline and ready to start.
+
+---
+
+## 🛠️ Built-in Safety Features
+
+- **Active Version Detection**: Multi-level detection pipeline (Modpack Manager, disk signatures, egg startup variables, and database history) displaying an active status card at the top of the interface.
+- **Clean Install Toggle**: Optional toggle in the install modal that wipes all existing server files before installing the new version — ideal for ecosystem migrations (e.g. Vanilla/Paper → Forge/Fabric). Only `server.jar.bak` and `eula.txt` are preserved. Unchecked and safe by default.
+- **Java Compatibility Matrix**: Automatically detects the Java version required by the selected Minecraft version (via MCJars API) and compares it against the server's configured Docker image. Displays a clear inline warning in the install modal when a mismatch is detected (e.g. the selected version requires Java 21 but the server image uses Java 17), preventing failed server starts.
 - **Standard Laravel Queue Compatibility**: Configured `ChangeVersionJob` to use Pelican's default queue worker (`config('versions.queue', null)`), ensuring background jobs process immediately on standard installations without requiring dedicated queue worker flags.
 - **Comprehensive Minecraft Server Detection**: Expanded `canAccess()` to recognize community eggs named `Paper`, `Purpur`, `Forge`, `Fabric`, `Spigot`, `Bungee`, `Velocity`, and eggs using `server.jar` in their startup command.
-- **On-Demand Build Resolution**: Added a backend safety fallback in `startVersionChange` to fetch builds directly from the API if rapid user interaction causes state loss during Livewire hydration.
-- **Forge & NeoForge Size Fallback**: `resolveJarDetails()` automatically falls back to `zipSize` when `jarSize` is null, preventing false size mismatch errors.
 - **Zero Frontend Interference**: 100% scoped inline CSS (`.mvc`). Operates independently of Vite or Tailwind asset compilation, guaranteeing zero conflicts with existing panel themes.
 
 ---
@@ -85,7 +88,7 @@ All behaviors can be customized through environment variables in your Pelican `.
 
 ### Method 1: Web Interface (Recommended)
 
-1. Download the latest `versions_v1.0.3-beta.zip` (or `versions.zip`) from the [Releases](https://github.com/YJCavalcante/Minecraft-Version-Changer-for-Pelincan-Painel/releases) page.
+1. Download the latest `versions_v1.1.0-beta.zip` (or `versions.zip`) from the [Releases](https://github.com/YJCavalcante/Minecraft-Version-Changer-for-Pelincan-Painel/releases) page.
 2. Log into your Pelican Panel as an administrator and go to **Admin → Plugins**.
 3. Click **Import from file** in the top right corner.
 4. Upload the zip file.
@@ -95,7 +98,7 @@ All behaviors can be customized through environment variables in your Pelican `.
 
 1. Extract the release archive into your panel plugins directory:
    ```bash
-   unzip versions_v1.0.3-beta.zip -d /var/www/pelican/plugins/versions/
+   unzip versions_v1.1.0-beta.zip -d /var/www/pelican/plugins/versions/
    ```
 2. Set ownership and permissions:
    ```bash
@@ -105,25 +108,26 @@ All behaviors can be customized through environment variables in your Pelican `.
 3. Run the installer:
    ```bash
    php /var/www/pelican/artisan p:plugin:install versions
+   php /var/www/pelican/artisan optimize:clear
    ```
 
 ---
 
-## 💡 Panel Permissions & Best Practices
+## 🔄 Updating to v1.1.0-beta
 
-To ensure Pelican Panel background queues, plugins, and theme compilers work without permissions issues, ensure the panel directory belongs to the web server user (`www-data`):
+To update an existing installation to **v1.1.0-beta**:
 
 ```bash
-# Ensure correct ownership across the panel
-sudo chown -R www-data:www-data /var/www/pelican
+# 1. Download and extract over the existing plugin folder
+unzip -o versions_v1.1.0-beta.zip -d /var/www/pelican/plugins/
 
-# Ensure cache directories are writable for theme compilers (yarn/vite)
-sudo mkdir -p /var/www/.cache /var/www/.yarn
-sudo chown -R www-data:www-data /var/www/.cache /var/www/.yarn
+# 2. Fix permissions
+chown -R www-data:www-data /var/www/pelican/plugins/versions
+
+# 3. Clear Pelican caches
+cd /var/www/pelican
+php artisan optimize:clear
 ```
-
-> [!NOTE]
-> **Theme Independence**: Minecraft Version Changer is an independent plugin that does **not** modify or trigger Vite asset builds. It will never interfere with, break, or overwrite your panel themes.
 
 ---
 
@@ -133,6 +137,34 @@ The **Version Changer** navigation item appears in the sidebar for Minecraft ser
 
 - **Panel Administrators & Server Owners**: Full access by default.
 - **Subusers**: Access can be granted via the custom `versions.change` permission or standard `settings.reinstall` permission in server subuser settings.
+
+---
+
+## 💡 Best Practices
+
+To ensure Pelican Panel background queues, plugins, and web workers operate smoothly, ensure the panel directory belongs to the web server user (`www-data`):
+
+```bash
+# Ensure correct ownership across the panel
+sudo chown -R www-data:www-data /var/www/pelican
+
+# Ensure cache directories are writable
+sudo mkdir -p /var/www/.cache /var/www/.yarn
+sudo chown -R www-data:www-data /var/www/.cache /var/www/.yarn
+```
+
+---
+
+## ❓ Frequently Asked Questions (FAQ)
+
+### Does this plugin conflict with Vite or custom panel themes?
+**No.** Version Changer uses 100% scoped CSS (`.mvc`) embedded directly in its Blade component. It does not alter global styles, does not invoke Vite compilers, and works seamlessly with all Pelican themes in both light and dark modes.
+
+### What if I install a modpack via Modpack Manager or FTP?
+**It detects it automatically.** In v1.1.0-beta, the multi-tier detection engine inspects Modpack Manager records and server root disk files (such as `unix_args.txt`, `run.sh`, `mohist.yml`, etc.). It will immediately identify the active software and version instead of showing "Vanilla".
+
+### How does dynamic `SERVER_JARFILE` synchronization work?
+The plugin detects the specific startup variable defined in the server's Egg (such as `SERVER_JARFILE=server.jar` or `JARFILE=custom.jar`). It downloads directly to that file and, if a zip bundle is extracted, renames the launch JAR to match the variable and notifies Wings (`$serverRepo->sync()`) so container restart arguments are always synchronized.
 
 ---
 
