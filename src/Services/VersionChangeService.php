@@ -103,7 +103,9 @@ class VersionChangeService
                             $record->appendLog('  Server stopped cleanly.');
                             return true;
                         }
-                    } catch (Throwable) {}
+                    } catch (Throwable $e) {
+                        \Log::debug('[Versions] stepStop poll error: ' . $e->getMessage());
+                    }
                 }
 
                 $record->appendLog('  Shutdown wait timeout reached. Proceeding with file modifications.');
@@ -118,39 +120,71 @@ class VersionChangeService
         }
     }
 
+    public function getTargetServerJarFilename(Server $server): string
+    {
+        try {
+            $serverVar = $server->serverVariables()
+                ->whereHas('variable', fn ($q) => $q->where('env_variable', 'SERVER_JARFILE'))
+                ->first();
+
+            $val = trim((string) ($serverVar?->variable_value ?? ''));
+            if (empty($val) && $serverVar?->variable) {
+                $val = trim((string) ($serverVar->variable->default_value ?? ''));
+            }
+
+            if (!empty($val)) {
+                $clean = basename(str_replace('\\', '/', $val));
+                if (!empty($clean)) {
+                    return $clean;
+                }
+            }
+        } catch (Throwable $e) {
+            Log::debug('[Versions] getTargetServerJarFilename error: ' . $e->getMessage());
+        }
+
+        return 'server.jar';
+    }
+
     private function stepBackupAndClean(VersionChange $record): void
     {
+        $server = $record->server;
+        $targetJar = $this->getTargetServerJarFilename($server);
+
         $record->appendLog('Step 2/6: Checking existing files and cleaning legacy libraries...');
+        $record->appendLog("  Target server executable is: {$targetJar}");
 
         try {
             $entries = (array) $this->fileRepo->getDirectory('/');
 
-            $hasJar = collect($entries)->contains(
-                fn ($e) => ($e['name'] ?? '') === 'server.jar' && !($e['directory'] ?? false)
-            );
+            $jarsToCheck = array_unique(array_filter([$targetJar, 'server.jar']));
 
-            if ($hasJar) {
-                if (config('versions.keep_backup', true)) {
-                    $hasOldBak = collect($entries)->contains(
-                        fn ($e) => ($e['name'] ?? '') === 'server.jar.bak' && !($e['directory'] ?? false)
-                    );
+            foreach ($jarsToCheck as $jarName) {
+                $hasJar = collect($entries)->contains(
+                    fn ($e) => ($e['name'] ?? '') === $jarName && !($e['directory'] ?? false)
+                );
 
-                    if ($hasOldBak) {
-                        $this->fileRepo->deleteFiles('/', ['server.jar.bak']);
-                        $record->appendLog('  Removed previous server.jar.bak backup.');
+                if ($hasJar) {
+                    $bakName = "{$jarName}.bak";
+                    if (config('versions.keep_backup', true)) {
+                        $hasOldBak = collect($entries)->contains(
+                            fn ($e) => ($e['name'] ?? '') === $bakName && !($e['directory'] ?? false)
+                        );
+
+                        if ($hasOldBak) {
+                            $this->fileRepo->deleteFiles('/', [$bakName]);
+                            $record->appendLog("  Removed previous {$bakName} backup.");
+                        }
+
+                        $this->fileRepo->renameFiles('/', [
+                            ['from' => $jarName, 'to' => $bakName]
+                        ]);
+
+                        $record->appendLog("  Renamed existing {$jarName} → {$bakName}.");
+                    } else {
+                        $this->fileRepo->deleteFiles('/', [$jarName]);
+                        $record->appendLog("  Deleted previous {$jarName} (backup disabled).");
                     }
-
-                    $this->fileRepo->renameFiles('/', [
-                        ['from' => 'server.jar', 'to' => 'server.jar.bak']
-                    ]);
-
-                    $record->appendLog('  Renamed existing server.jar → server.jar.bak.');
-                } else {
-                    $this->fileRepo->deleteFiles('/', ['server.jar']);
-                    $record->appendLog('  Deleted previous server.jar (backup disabled).');
                 }
-            } else {
-                $record->appendLog('  No existing server.jar found; skipping backup.');
             }
 
             if (config('versions.clean_libraries', true)) {
@@ -169,7 +203,7 @@ class VersionChangeService
 
                 $currentEntries = (array) $this->fileRepo->getDirectory('/');
 
-                $preserved = ['server.jar.bak', 'eula.txt'];
+                $preserved = array_unique([$targetJar . '.bak', 'server.jar.bak', 'eula.txt']);
                 $toDelete   = [];
 
                 foreach ($currentEntries as $entry) {
@@ -196,14 +230,17 @@ class VersionChangeService
 
     private function stepDownload(VersionChange $record): bool
     {
+        $server = $record->server;
+        $targetJar = $this->getTargetServerJarFilename($server);
+
         $urlPath = parse_url($record->jar_url, PHP_URL_PATH) ?? '';
         $isZip = str_ends_with(strtolower($urlPath), '.zip')
             || str_contains(strtolower($record->jar_url), '.zip');
 
-        $filename = $isZip ? 'server.zip' : 'server.jar';
+        $filename = $isZip ? 'server.zip' : $targetJar;
 
         $record->appendLog('Step 3/6: Telling Wings daemon to pull the new files...');
-        $record->appendLog("  Target: {$record->software} {$record->minecraft_version} ({$record->build_name})");
+        $record->appendLog("  Target: {$record->software} {$record->minecraft_version} ({$record->build_name}) → {$filename}");
 
         try {
             $this->fileRepo->pull($record->jar_url, '/', [
@@ -263,7 +300,9 @@ class VersionChangeService
 
     private function stepVerifyAndExtract(VersionChange $record, bool $isZip): void
     {
-        $filename = $isZip ? 'server.zip' : 'server.jar';
+        $server = $record->server;
+        $targetJar = $this->getTargetServerJarFilename($server);
+        $filename = $isZip ? 'server.zip' : $targetJar;
         $record->appendLog("Step 4/6: Verifying {$filename} integrity...");
 
         $actual = $this->getRemoteFileSize($filename);
@@ -293,7 +332,22 @@ class VersionChangeService
                 try {
                     $this->fileRepo->deleteFiles('/', ['server.zip']);
                     $record->appendLog('  Cleaned up temporary server.zip.');
-                } catch (Throwable) {}
+                } catch (Throwable $e) {
+                    Log::debug('[Versions] zip cleanup failed: ' . $e->getMessage());
+                }
+
+                if ($targetJar !== 'server.jar') {
+                    $rootEntries = (array) $this->fileRepo->getDirectory('/');
+                    $hasServerJar = collect($rootEntries)->contains(
+                        fn ($e) => ($e['name'] ?? '') === 'server.jar' && !($e['directory'] ?? false)
+                    );
+                    if ($hasServerJar) {
+                        $this->fileRepo->renameFiles('/', [
+                            ['from' => 'server.jar', 'to' => $targetJar]
+                        ]);
+                        $record->appendLog("  Aligned extracted server.jar to configured {$targetJar}.");
+                    }
+                }
             } catch (Throwable $e) {
                 throw new RuntimeException("Failed to decompress {$filename}: " . $e->getMessage(), 0, $e);
             }
@@ -310,7 +364,8 @@ class VersionChangeService
                 $record->appendLog('  Existing Minecraft EULA agreement detected and preserved.');
                 return;
             }
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            \Log::debug('[Versions] EULA check failed: ' . $e->getMessage());
         }
 
         $record->appendLog('  Notice: Minecraft EULA is handled via Pelican native prompt on startup.');
@@ -323,15 +378,25 @@ class VersionChangeService
                 ->whereHas('variable', fn ($q) => $q->where('env_variable', 'SERVER_JARFILE'))
                 ->first();
 
-            if ($serverVar && $serverVar->variable_value !== 'server.jar') {
-                $serverVar->update(['variable_value' => 'server.jar']);
-                $record->appendLog('  Updated SERVER_JARFILE egg variable to "server.jar".');
-                try {
-                    $this->serverRepo->sync();
-                    $record->appendLog('  Synced environment configuration with Wings node.');
-                } catch (Throwable) {}
+            if ($serverVar) {
+                $targetJar = $this->getTargetServerJarFilename($server);
+                $currentVal = trim((string) $serverVar->variable_value);
+
+                if (empty($currentVal) || $currentVal !== $targetJar) {
+                    $serverVar->update(['variable_value' => $targetJar]);
+                    $record->appendLog("  Synchronized SERVER_JARFILE egg variable to \"{$targetJar}\".");
+                    try {
+                        $this->serverRepo->sync();
+                        $record->appendLog('  Synced environment configuration with Wings node.');
+                    } catch (Throwable $e) {
+                        Log::debug('[Versions] sync environment failed: ' . $e->getMessage());
+                    }
+                } else {
+                    $record->appendLog("  SERVER_JARFILE egg variable verified: \"{$targetJar}\".");
+                }
             }
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::debug('[Versions] stepSyncEggVariable failed: ' . $e->getMessage());
         }
     }
 
@@ -356,7 +421,9 @@ class VersionChangeService
                     return (int) ($entry['size'] ?? 0);
                 }
             }
-        } catch (Throwable) {}
+        } catch (Throwable $e) {
+            \Log::debug('[Versions] getRemoteFileSize failed: ' . $e->getMessage());
+        }
 
         return null;
     }
