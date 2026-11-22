@@ -3,28 +3,137 @@
 namespace Pelican\Versions\Filament\Server\Pages;
 
 use App\Models\Server;
-use App\Repositories\Daemon\DaemonFileRepository;
 use App\Repositories\Daemon\DaemonServerRepository;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
-use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Schema;
+use Livewire\Attributes\Locked;
 use Pelican\Versions\Jobs\ChangeVersionJob;
 use Pelican\Versions\Models\VersionChange;
 use Pelican\Versions\Services\McJarsService;
+use Pelican\Versions\Services\ServerSoftwareDetector;
+use Pelican\Versions\Services\SoftwareParser;
+use Pelican\Versions\Services\VersionChangeService;
 use Throwable;
 
 class VersionsPage extends Page
 {
+    private const EGG_HINTS = [
+        'minecraft', 'paper', 'purpur', 'folia', 'neoforge', 'forge', 'fabric', 'quilt', 'spigot', 'bungee', 'velocity',
+        'youer', 'catserver', 'ketting', 'banner', 'mohist', 'magma', 'arclight', 'thermos', 'cauldron', 'crucible', 'cardboard',
+    ];
+
+    private const ICON_NEEDLES = [
+        'youer'     => 'youer',
+        'catserver' => 'catserver',
+        'ketting'   => 'ketting',
+        'banner'    => 'banner',
+        'mohist'    => 'mohist',
+        'magma'     => 'magma',
+        'arclight'  => 'arclight',
+        'thermos'   => 'thermos',
+        'cauldron'  => 'thermos',
+        'crucible'  => 'crucible',
+        'cardboard' => 'cardboard',
+        'folia'     => 'folia',
+        'neoforge'  => 'neoforge',
+        'forge'     => 'forge',
+        'fabric'    => 'fabric',
+        'quilt'     => 'quilt',
+        'paper'     => 'paper',
+        'purpur'    => 'purpur',
+    ];
+
     protected static string|\BackedEnum|null $navigationIcon = 'tabler-arrows-exchange';
     protected static ?string $navigationLabel = 'Version Changer';
     protected static ?string $slug            = 'versions';
     protected static ?int    $navigationSort  = 8;
 
     protected string $view = 'versions::filament.server.pages.versions-page';
+
+    public string $search           = '';
+    public string $selectedCategory = 'recommended';
+    public string $versionSearch    = '';
+    public bool   $showSnapshots    = false;
+    public bool   $cleanInstall     = false;
+
+    #[Locked]
+    public bool $showInstallModal = false;
+
+    #[Locked]
+    public bool $showConfirmModal = false;
+
+    #[Locked]
+    public bool $showLogModal = false;
+
+    #[Locked]
+    public string $targetJarFilename = 'server.jar';
+
+    #[Locked]
+    public array $types = [];
+
+    #[Locked]
+    public ?string $selectedSoftware = null;
+
+    #[Locked]
+    public ?array $softwareDetails = null;
+
+    #[Locked]
+    public array $availableVersions = [];
+
+    #[Locked]
+    public ?string $selectedVersion = null;
+
+    #[Locked]
+    public ?array $versionDetails = null;
+
+    #[Locked]
+    public array $availableBuilds = [];
+
+    #[Locked]
+    public string|int|null $selectedBuildNumber = 'latest';
+
+    #[Locked]
+    public ?array $selectedBuild = null;
+
+    #[Locked]
+    public bool $isLoadingVersions = false;
+
+    #[Locked]
+    public bool $isLoadingBuilds = false;
+
+    #[Locked]
+    public string $containerStatus = 'offline';
+
+    #[Locked]
+    public bool $isChanging = false;
+
+    #[Locked]
+    public int $changeId = 0;
+
+    #[Locked]
+    public string $changeStatus = '';
+
+    #[Locked]
+    public string $changeLog = '';
+
+    #[Locked]
+    public string $changeError = '';
+
+    #[Locked]
+    public ?array $viewingRecord = null;
+
+    #[Locked]
+    public ?array $javaWarning = null;
+
+    #[Locked]
+    public array $recentChanges = [];
+
+    #[Locked]
+    public ?array $currentVersionInfo = null;
 
     public static function getNavigationSort(): ?int
     {
@@ -39,27 +148,29 @@ class VersionsPage extends Page
             return false;
         }
 
-        $tags = array_map('strtolower', (array) ($server->egg?->tags ?? []));
+        $tags    = array_map('strtolower', (array) ($server->egg?->tags ?? []));
         $eggName = strtolower($server->egg?->name ?? '');
         $startup = strtolower($server->startup ?? '');
 
         $isMinecraft = in_array('minecraft', $tags, true)
-            || str_contains($eggName, 'minecraft')
-            || str_contains($eggName, 'paper')
-            || str_contains($eggName, 'purpur')
-            || str_contains($eggName, 'forge')
-            || str_contains($eggName, 'fabric')
-            || str_contains($eggName, 'spigot')
-            || str_contains($eggName, 'bungee')
-            || str_contains($eggName, 'velocity')
             || str_contains($startup, 'server.jar')
             || str_contains($startup, 'minecraft');
 
-        if (!$isMinecraft) {
-            return false;
+        foreach (self::EGG_HINTS as $hint) {
+            if ($isMinecraft) {
+                break;
+            }
+
+            $isMinecraft = str_contains($eggName, $hint);
         }
 
+        return $isMinecraft && static::userCanManage($server);
+    }
+
+    protected static function userCanManage(Server $server): bool
+    {
         $user = user();
+
         if (!$user) {
             return false;
         }
@@ -74,67 +185,34 @@ class VersionsPage extends Page
 
     public function getServer(): Server
     {
-        $server = Filament::getTenant();
-        return $server;
+        return Filament::getTenant();
     }
 
-    public string $search           = '';
-    public string $selectedCategory = 'recommended';
-    public array  $types            = [];
-    public ?string $selectedSoftware = null;
-    public ?array $softwareDetails  = null;
-
-    public array   $availableVersions   = [];
-    public string  $versionSearch       = '';
-    public ?string $selectedVersion     = null;
-    public ?array  $versionDetails      = null;
-    public array   $availableBuilds     = [];
-    public string|int|null $selectedBuildNumber = 'latest';
-    public ?array $selectedBuild       = null;
-
-    public bool $isLoadingVersions = false;
-    public bool $isLoadingBuilds   = false;
-
-    public string $containerStatus = 'offline';
-
-    public bool   $isChanging   = false;
-    public int    $changeId     = 0;
-    public string $changeStatus = '';
-    public string $changeLog    = '';
-    public string $changeError  = '';
-
-    public bool   $showInstallModal = false;
-    public bool   $showConfirmModal = false;
-    public bool   $showLogModal     = false;
-    public ?array $viewingRecord    = null;
-
-    public bool   $keepBackup    = true;
-    public bool   $cleanInstall  = false;
-
-    public ?array $javaWarning   = null;
-
-    public array  $recentChanges      = [];
-    public ?array $currentVersionInfo = null;
-
-    public function mount(?McJarsService $mcJarsService = null, ?DaemonServerRepository $serverRepo = null): void
+    public function canManageVersions(): bool
     {
-        $mcJarsService = $mcJarsService ?? app(McJarsService::class);
-        $serverRepo    = $serverRepo ?? app(DaemonServerRepository::class);
+        return static::userCanManage($this->getServer());
+    }
 
-        try {
-            $details = $serverRepo->setServer($this->getServer())->getDetails();
-            $this->containerStatus = (string) ($details['state'] ?? 'offline');
-        } catch (Throwable $e) {
-            \Log::debug('[Versions] mount getDetails error: ' . $e->getMessage());
-            $this->containerStatus = 'offline';
+    public function mount(): void
+    {
+        $server   = $this->getServer();
+        $serverId = $server->id;
+
+        $this->refreshContainerStatus();
+        $this->targetJarFilename = app(VersionChangeService::class)->getTargetServerJarFilename($server);
+        $this->types             = app(McJarsService::class)->getTypes();
+
+        $cachedVersion = Cache::get("versions:current:{$serverId}");
+        if (is_array($cachedVersion) && $cachedVersion !== []) {
+            $this->currentVersionInfo = $cachedVersion;
         }
 
-        $this->types = $mcJarsService->getTypes();
+        VersionChange::failStale($serverId);
 
         $activeChange = VersionChange::query()
-            ->where('server_id', $this->getServer()->id)
-            ->whereIn('status', [VersionChange::STATUS_PENDING, VersionChange::STATUS_CHANGING])
-            ->latest()
+            ->where('server_id', $serverId)
+            ->active()
+            ->latest('id')
             ->first();
 
         if ($activeChange) {
@@ -146,7 +224,6 @@ class VersionsPage extends Page
         }
 
         $this->loadHistory();
-        $this->loadCurrentVersion();
     }
 
     public function selectCategory(string $category): void
@@ -156,219 +233,282 @@ class VersionsPage extends Page
 
     public function openSoftwareModal(string $softwareKey): void
     {
-        $this->selectSoftware($softwareKey, openModal: true);
+        $this->selectSoftware($softwareKey, true);
     }
 
     public function closeInstallModal(): void
     {
         $this->showInstallModal  = false;
+        $this->showConfirmModal  = false;
         $this->availableVersions = [];
         $this->availableBuilds   = [];
         $this->selectedBuild     = null;
         $this->versionSearch     = '';
+        $this->showSnapshots     = false;
+        $this->cleanInstall      = false;
     }
 
-    public function selectSoftware(string $softwareKey, bool $openModal = true, ?McJarsService $mcJarsService = null): void
+    public function selectSoftware(string $softwareKey, bool $openModal = true): void
     {
-        $key = strtoupper(trim($softwareKey));
-        $mcJarsService = $mcJarsService ?? app(McJarsService::class);
+        if (!$this->ensureAuthorized()) {
+            return;
+        }
 
-        if ($this->selectedSoftware === $key && !empty($this->availableVersions)) {
+        $key = strtoupper(trim($softwareKey));
+        $svc = app(McJarsService::class);
+
+        $details = null;
+        foreach ($this->types as $group) {
+            if (isset($group[$key])) {
+                $details = $group[$key];
+                break;
+            }
+        }
+
+        if ($details === null && $this->types !== []) {
+            Notification::make()->title('Unknown software type.')->warning()->send();
+
+            return;
+        }
+
+        if ($this->selectedSoftware === $key && $this->availableVersions !== []) {
             if ($openModal) {
+                $this->showConfirmModal = false;
                 $this->showInstallModal = true;
             }
+
             return;
         }
 
         $this->selectedSoftware = $key;
         $this->versionSearch    = '';
-
-        $this->softwareDetails = null;
-        foreach ($this->types as $group) {
-            if (isset($group[$this->selectedSoftware])) {
-                $this->softwareDetails = $group[$this->selectedSoftware];
-                break;
-            }
-        }
-
-        if (!$this->softwareDetails) {
-            $this->softwareDetails = [
-                'name'        => ucfirst(strtolower($this->selectedSoftware)),
-                'description' => 'Minecraft server software.',
-                'icon'        => null,
-            ];
-        }
+        $this->cleanInstall     = false;
+        $this->softwareDetails  = $details ?? [
+            'name'        => ucfirst(strtolower($key)),
+            'description' => 'Minecraft server software.',
+            'icon'        => null,
+        ];
 
         $this->isLoadingVersions = true;
         try {
-            $this->availableVersions = $mcJarsService->getVersions($this->selectedSoftware);
+            $this->availableVersions = $svc->getVersions($key);
         } catch (Throwable $e) {
             $this->availableVersions = [];
         }
         $this->isLoadingVersions = false;
 
-        if (!empty($this->availableVersions)) {
-            $firstVersion = array_key_first($this->availableVersions);
-            $this->selectVersion($firstVersion, $mcJarsService);
+        if ($this->availableVersions !== []) {
+            $first = $this->firstRelease() ?? array_key_first($this->availableVersions);
+            $this->selectVersion((string) $first);
         } else {
             $this->selectedVersion = null;
             $this->versionDetails  = null;
             $this->availableBuilds = [];
             $this->selectedBuild   = null;
+            $this->javaWarning     = null;
         }
 
         if ($openModal) {
+            $this->showConfirmModal = false;
             $this->showInstallModal = true;
         }
     }
 
-    public function selectVersion(string $version, ?McJarsService $mcJarsService = null): void
+    public function selectVersion(string $version): void
     {
-        if (empty($version)) {
+        if (!$this->ensureAuthorized()) {
             return;
         }
 
-        $mcJarsService = $mcJarsService ?? app(McJarsService::class);
+        if ($version === '' || !isset($this->availableVersions[$version])) {
+            return;
+        }
+
         $this->selectedVersion = $version;
-        $this->versionDetails  = $this->availableVersions[$version] ?? null;
+        $this->versionDetails  = $this->availableVersions[$version];
 
         $this->isLoadingBuilds = true;
         try {
-            $this->availableBuilds = $mcJarsService->getBuilds($this->selectedSoftware, $version);
+            $this->availableBuilds = app(McJarsService::class)->getBuilds((string) $this->selectedSoftware, $version);
         } catch (Throwable $e) {
             $this->availableBuilds = [];
         }
         $this->isLoadingBuilds = false;
 
         $this->selectBuild('latest');
-
         $this->checkJavaCompatibility($version);
+    }
+
+    public function updatedVersionSearch(): void
+    {
+        $this->syncSelectedVersionWithFilter();
+    }
+
+    public function updatedShowSnapshots(): void
+    {
+        $this->syncSelectedVersionWithFilter();
     }
 
     public function selectBuild(string|int|null $buildNumber): void
     {
-        $this->selectedBuildNumber = $buildNumber !== null ? (string) $buildNumber : 'latest';
-
-        if (empty($this->availableBuilds)) {
-            $this->selectedBuild = $this->versionDetails['latest'] ?? null;
+        if (!$this->ensureAuthorized()) {
             return;
         }
 
-        if ($buildNumber === null || $buildNumber === '' || $buildNumber === '0' || $buildNumber === 0 || $buildNumber === 'latest') {
-            $this->selectedBuild = $this->availableBuilds[0];
-            $this->selectedBuildNumber = 'latest';
+        $wanted = ($buildNumber === null || $buildNumber === '' || $buildNumber === 0 || $buildNumber === '0') ? 'latest' : (string) $buildNumber;
+
+        if ($this->availableBuilds === []) {
+            $this->selectedBuildNumber = $wanted;
+            $this->selectedBuild       = $this->versionDetails['latest'] ?? null;
+
             return;
         }
 
-        $specialTypes = ['FABRIC', 'FORGE', 'NEOFORGE', 'SPONGE', 'LEGACYFABRIC', 'QUILT'];
-        $isSpecial = in_array(strtoupper($this->selectedSoftware ?? ''), $specialTypes, true);
+        $found = $this->findBuild($this->availableBuilds, $wanted);
 
-        $found = collect($this->availableBuilds)->first(function ($b) use ($buildNumber, $isSpecial) {
-            if ($isSpecial && isset($b['name']) && (string) $b['name'] === (string) $buildNumber) {
-                return true;
-            }
-            if (isset($b['buildNumber']) && (string) $b['buildNumber'] === (string) $buildNumber) {
-                return true;
-            }
-            return (string) ($b['name'] ?? '') === (string) $buildNumber;
-        });
+        if ($found === null) {
+            $found  = $this->availableBuilds[0];
+            $wanted = 'latest';
+        }
 
-        $this->selectedBuild = $found ?? $this->availableBuilds[0];
+        $this->selectedBuildNumber = $wanted;
+        $this->selectedBuild       = $found;
     }
 
-    public function canManageVersions(): bool
+    public function openConfirmModal(): void
     {
-        $server = $this->getServer();
-        $user = user();
-
-        if (!$user) {
-            return false;
-        }
-
-        if ($user->isRootAdmin() || $user->isAdmin() || $server->owner_id === $user->id) {
-            return true;
-        }
-
-        return $user->can('versions.change', $server)
-            || $user->can('settings.reinstall', $server);
-    }
-
-    public function openConfirmModal(?DaemonServerRepository $serverRepo = null): void
-    {
-        if (!$this->canManageVersions()) {
-            Notification::make()->title('Unauthorized')->danger()->send();
-            return;
-        }
-
-        if (empty($this->selectedSoftware) || empty($this->selectedVersion)) {
-            Notification::make()->title('Please select a software and version first.')->warning()->send();
-            return;
-        }
-
-        try {
-            $serverRepo = $serverRepo ?? app(DaemonServerRepository::class);
-            $details = $serverRepo->setServer($this->getServer())->getDetails();
-            $this->containerStatus = (string) ($details['state'] ?? 'offline');
-        } catch (Throwable $e) {
-            \Log::debug('[Versions] openConfirmModal getDetails error: ' . $e->getMessage());
-        }
-
-        $this->showConfirmModal = true;
-    }
-
-    public function closeConfirmModal(): void
-    {
-        $this->showConfirmModal = false;
-    }
-
-    public function startVersionChange(?McJarsService $mcJarsService = null): void
-    {
-        $mcJarsService = $mcJarsService ?? app(McJarsService::class);
-
-        if (!$this->canManageVersions()) {
-            Notification::make()->title('Unauthorized action.')->danger()->send();
+        if (!$this->ensureAuthorized()) {
             return;
         }
 
         if ($this->isChanging) {
             Notification::make()->title('A version change is already in progress.')->warning()->send();
+
             return;
         }
 
-        if (empty($this->selectedBuild) && !empty($this->selectedSoftware) && !empty($this->selectedVersion)) {
-            $builds = $mcJarsService->getBuilds($this->selectedSoftware, $this->selectedVersion);
-            if (!empty($builds)) {
-                $this->availableBuilds = $builds;
-                $this->selectBuild($this->selectedBuildNumber);
-            }
+        if (empty($this->selectedSoftware) || empty($this->selectedVersion)) {
+            Notification::make()->title('Please select a software and version first.')->warning()->send();
+
+            return;
         }
 
-        $build = $this->selectedBuild ?? [];
-        $jarDetails = $mcJarsService->resolveJarDetails($build);
+        if ($this->filteredVersions === []) {
+            Notification::make()->title('No matching version is selected.')->warning()->send();
 
-        if (empty($jarDetails['url'])) {
+            return;
+        }
+
+        $this->syncSelectedVersionWithFilter();
+        $this->refreshContainerStatus();
+        $this->targetJarFilename = app(VersionChangeService::class)->getTargetServerJarFilename($this->getServer());
+        $this->showInstallModal  = false;
+        $this->showConfirmModal  = true;
+    }
+
+    public function closeConfirmModal(): void
+    {
+        $this->showConfirmModal = false;
+
+        if ($this->selectedSoftware && $this->softwareDetails) {
+            $this->showInstallModal = true;
+        }
+    }
+
+    public function startVersionChange(): void
+    {
+        if (!$this->ensureAuthorized()) {
+            return;
+        }
+
+        if ($this->isChanging) {
+            Notification::make()->title('A version change is already in progress.')->warning()->send();
+
+            return;
+        }
+
+        if (empty($this->selectedSoftware) || empty($this->selectedVersion)) {
+            Notification::make()->title('Please select a software and version first.')->warning()->send();
+
+            return;
+        }
+
+        $svc    = app(McJarsService::class);
+        $server = $this->getServer();
+
+        $builds = $svc->getBuilds($this->selectedSoftware, $this->selectedVersion);
+
+        if ($builds === []) {
             Notification::make()
-                ->title('Download URL Unavailable')
-                ->body('MCJars did not provide a download URL for this build. Please try another build or version.')
+                ->title('Builds unavailable')
+                ->body('Could not load the build list from MCJars. Please try again in a moment.')
                 ->danger()
                 ->send();
+
             return;
         }
 
-        $record = VersionChange::create([
-            'server_id'         => $this->getServer()->id,
-            'software'          => $this->selectedSoftware,
-            'minecraft_version' => $this->selectedVersion,
-            'build_number'      => $jarDetails['build_number'],
-            'build_name'        => $jarDetails['name'],
-            'jar_url'           => $jarDetails['url'],
-            'jar_size'          => $jarDetails['size'],
-            'clean_install'     => $this->cleanInstall,
-            'status'            => VersionChange::STATUS_PENDING,
-            'log'               => "[" . now()->format('H:i:s') . "] Version change queued for {$this->selectedSoftware} {$this->selectedVersion} ({$jarDetails['name']})" . ($this->cleanInstall ? ' [CLEAN INSTALL]' : '') . "\n",
-        ]);
+        $this->availableBuilds = $builds;
+        $build                 = $this->findBuild($builds, (string) ($this->selectedBuildNumber ?? 'latest'));
 
-        ChangeVersionJob::dispatch($record->id);
+        if ($build === null) {
+            $this->selectBuild('latest');
+
+            Notification::make()
+                ->title('Selected build is no longer available')
+                ->body('The build list changed. Review the selection and try again.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->selectedBuild = $build;
+        $jar                 = $svc->resolveJarDetails($build);
+
+        if (empty($jar['url']) || !$svc->isAllowedDownloadUrl($jar['url'])) {
+            Notification::make()
+                ->title('Download URL Unavailable')
+                ->body('MCJars did not provide a valid download URL for this build. Please try another build or version.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $software     = $this->selectedSoftware;
+        $mcVersion    = $this->selectedVersion;
+        $cleanInstall = $this->cleanInstall;
+
+        $record = DB::transaction(function () use ($server, $software, $mcVersion, $jar, $cleanInstall) {
+            Server::query()->whereKey($server->id)->lockForUpdate()->first();
+
+            VersionChange::failStale($server->id);
+
+            if (VersionChange::query()->active()->where('server_id', $server->id)->exists()) {
+                return null;
+            }
+
+            return VersionChange::create([
+                'server_id'         => $server->id,
+                'software'          => $software,
+                'minecraft_version' => $mcVersion,
+                'build_number'      => $jar['build_number'],
+                'build_name'        => $jar['name'],
+                'jar_url'           => $jar['url'],
+                'jar_size'          => $jar['size'],
+                'clean_install'     => $cleanInstall,
+                'status'            => VersionChange::STATUS_PENDING,
+                'log'               => '[' . now()->format('H:i:s') . "] Version change queued for {$software} {$mcVersion} ({$jar['name']})" . ($cleanInstall ? ' [CLEAN INSTALL]' : '') . PHP_EOL,
+            ]);
+        });
+
+        if (!$record) {
+            Notification::make()->title('A version change is already in progress for this server.')->warning()->send();
+            $this->adoptActiveChange();
+
+            return;
+        }
 
         $this->changeId         = $record->id;
         $this->isChanging       = true;
@@ -379,9 +519,28 @@ class VersionsPage extends Page
         $this->showConfirmModal = false;
         $this->cleanInstall     = false;
 
+        try {
+            ChangeVersionJob::dispatch($record->id);
+        } catch (Throwable $e) {
+            $fresh = $record->fresh();
+            if (!$fresh || $fresh->isActive()) {
+                $record->markFailed('Could not queue the job: ' . $e->getMessage());
+            }
+            Log::error('[Versions] dispatch failed: ' . $e->getMessage());
+            $this->pollProgress();
+
+            return;
+        }
+
+        if (config('queue.default') === 'sync') {
+            $this->pollProgress();
+
+            return;
+        }
+
         Notification::make()
             ->title('Version Change Queued')
-            ->body("Installing {$this->selectedSoftware} {$this->selectedVersion}...")
+            ->body("Installing {$software} {$mcVersion}...")
             ->info()
             ->send();
 
@@ -390,50 +549,80 @@ class VersionsPage extends Page
 
     public function pollProgress(): void
     {
+        if (!$this->ensureAuthorized()) {
+            return;
+        }
+
         if (!$this->isChanging || !$this->changeId) {
             return;
         }
 
-        $record = VersionChange::find($this->changeId);
+        $server   = $this->getServer();
+        $serverId = $server->id;
+
+        $record = VersionChange::query()->where('server_id', $serverId)->find($this->changeId);
 
         if (!$record) {
             $this->isChanging = false;
+
             return;
+        }
+
+        if ($record->isStale()) {
+            VersionChange::failStale($serverId);
+            $record = $record->fresh() ?? $record;
         }
 
         $this->changeStatus = $record->status;
         $this->changeLog    = $record->log ?? '';
         $this->changeError  = $record->error_message ?? '';
 
-        if (!$record->isActive()) {
-            $this->isChanging = false;
-            $this->loadHistory();
+        if ($record->isActive()) {
+            return;
+        }
 
-            if ($record->status === VersionChange::STATUS_DONE) {
-                $this->loadCurrentVersion();
-                $restarted = str_contains($record->log ?? '', 'automatically restarted');
-                $body = $restarted
-                    ? 'The server jar has been updated and your server was automatically restarted.'
-                    : 'The server jar has been updated. You can now start your server from the console.';
+        $this->isChanging        = false;
+        $this->targetJarFilename = app(VersionChangeService::class)->getTargetServerJarFilename($server);
+        $this->loadHistory();
+        $this->refreshContainerStatus();
 
-                Notification::make()
-                    ->title('Version Changed Successfully!')
-                    ->body($body)
-                    ->success()
-                    ->send();
-            } elseif ($record->status === VersionChange::STATUS_FAILED) {
-                Notification::make()
-                    ->title('Version Change Failed')
-                    ->body($record->error_message ?: 'An error occurred while updating the server jar.')
-                    ->danger()
-                    ->send();
-            }
+        if ($record->status === VersionChange::STATUS_DONE) {
+            $this->loadCurrentVersion(true);
+
+            $restarted = str_contains($record->log ?? '', 'automatically restarted');
+
+            Notification::make()
+                ->title('Version Changed Successfully!')
+                ->body($restarted
+                    ? "{$this->targetJarFilename} has been updated and your server was automatically restarted."
+                    : "{$this->targetJarFilename} has been updated. You can now start your server from the console.")
+                ->success()
+                ->send();
+        } elseif ($record->status === VersionChange::STATUS_FAILED) {
+            Notification::make()
+                ->title('Version Change Failed')
+                ->body($record->error_message ?: 'An error occurred while updating the server jar.')
+                ->danger()
+                ->send();
+        }
+    }
+
+    public function dismissChangeResult(): void
+    {
+        if (!$this->isChanging) {
+            $this->changeStatus = '';
+            $this->changeError  = '';
         }
     }
 
     public function openLogModal(int $recordId): void
     {
-        $record = VersionChange::where('server_id', $this->getServer()->id)->find($recordId);
+        if (!$this->ensureAuthorized()) {
+            return;
+        }
+
+        $record = VersionChange::query()->where('server_id', $this->getServer()->id)->find($recordId);
+
         if ($record) {
             $this->viewingRecord = $record->toArray();
             $this->showLogModal  = true;
@@ -449,6 +638,7 @@ class VersionsPage extends Page
     public function loadHistory(): void
     {
         $this->recentChanges = VersionChange::query()
+            ->select(['id', 'server_id', 'software', 'minecraft_version', 'build_number', 'build_name', 'status', 'created_at'])
             ->where('server_id', $this->getServer()->id)
             ->latest()
             ->take(10)
@@ -456,363 +646,50 @@ class VersionsPage extends Page
             ->toArray();
     }
 
-    public function loadCurrentVersion(): void
+    public function loadCurrentVersion(bool $fresh = false): void
     {
+        if (!$this->canManageVersions()) {
+            return;
+        }
+
         $server = $this->getServer();
-        $this->currentVersionInfo = $this->detectActiveServerVersion($server);
+        $key    = "versions:current:{$server->id}";
+        $ttl    = max(0, (int) config('versions.detection_cache_ttl', 30));
+
+        if ($fresh) {
+            Cache::forget($key);
+        } elseif ($this->currentVersionInfo !== null) {
+            return;
+        } elseif ($ttl > 0) {
+            $cached = Cache::get($key);
+            if (is_array($cached) && $cached !== []) {
+                $this->currentVersionInfo = $cached;
+
+                return;
+            }
+        }
+
+        $info = $this->detectActiveServerVersion($server);
+
+        if (is_array($info) && $info !== [] && $ttl > 0) {
+            Cache::put($key, $info, $ttl);
+        }
+
+        $this->currentVersionInfo = $info;
     }
 
     public function detectActiveServerVersion(Server $server): ?array
     {
-        $variables = [];
-        try {
-            $variables = $server->serverVariables()
-                ->with('variable')
-                ->get()
-                ->pluck('variable_value', 'variable.env_variable')
-                ->toArray();
-        } catch (Throwable $e) {
-            Log::debug('[Versions] detectActiveServerVersion variables error: ' . $e->getMessage());
+        $info = app(ServerSoftwareDetector::class)->detect($server);
+
+        if (!$info) {
+            return null;
         }
 
-        $lastChange = VersionChange::query()
-            ->where('server_id', $server->id)
-            ->where('status', VersionChange::STATUS_DONE)
-            ->latest('id')
-            ->first();
+        $info['icon'] = $this->findSoftwareIcon($info['icon_hint'] ?? $info['software'] ?? null);
+        unset($info['icon_hint']);
 
-        $modpack = $this->detectModpack($server, $lastChange, $variables);
-        if ($modpack) {
-            return $modpack;
-        }
-
-        $disk = $this->detectFromDisk($server, $variables);
-        if ($disk) {
-            if ($lastChange && strtolower($disk['software']) === strtolower($lastChange->software)) {
-                $software = ucfirst(strtolower($lastChange->software));
-                return [
-                    'software'     => $software,
-                    'version'      => $lastChange->minecraft_version ?: $disk['version'],
-                    'build'        => $lastChange->build_name ?: ($lastChange->build_number ? "#{$lastChange->build_number}" : $disk['build']),
-                    'installed_at' => $lastChange->updated_at?->diffForHumans(),
-                    'source'       => 'history',
-                    'icon'         => $this->findSoftwareIcon($software),
-                ];
-            }
-
-            $disk['icon'] = $this->findSoftwareIcon($disk['software']);
-            return $disk;
-        }
-
-        if ($lastChange) {
-            $eggName = strtolower($server->egg?->name ?? '');
-            $lastSoftware = strtolower($lastChange->software);
-
-            $isContradicted = ($lastSoftware === 'vanilla' && (
-                str_contains($eggName, 'forge') ||
-                str_contains($eggName, 'fabric') ||
-                str_contains($eggName, 'neoforge') ||
-                str_contains($eggName, 'paper') ||
-                !empty($variables['FORGE_VERSION']) ||
-                !empty($variables['NEOFORGE_VERSION']) ||
-                !empty($variables['FABRIC_VERSION'])
-            ));
-
-            if (!$isContradicted) {
-                $software = ucfirst(strtolower($lastChange->software));
-                return [
-                    'software'     => $software,
-                    'version'      => $lastChange->minecraft_version,
-                    'build'        => $lastChange->build_name ?: ($lastChange->build_number ? "#{$lastChange->build_number}" : null),
-                    'installed_at' => $lastChange->updated_at?->diffForHumans(),
-                    'source'       => 'history',
-                    'icon'         => $this->findSoftwareIcon($software),
-                ];
-            }
-        }
-
-        $eggInfo = $this->detectFromEgg($server, $variables);
-        if ($eggInfo) {
-            $eggInfo['icon'] = $this->findSoftwareIcon($eggInfo['software']);
-            return $eggInfo;
-        }
-
-        return null;
-    }
-
-    private function detectModpack(Server $server, ?VersionChange $lastChange, array $variables): ?array
-    {
-        try {
-            if (Schema::hasTable('modpack_installs')) {
-                $latestModpack = DB::table('modpack_installs')
-                    ->where('server_id', $server->id)
-                    ->where('status', 'installed')
-                    ->latest('updated_at')
-                    ->first();
-
-                if ($latestModpack) {
-                    $modpackTime = Carbon::parse($latestModpack->updated_at);
-                    $lastChangeTime = $lastChange?->updated_at;
-
-                    if (!$lastChangeTime || $modpackTime->gte($lastChangeTime) || strtolower($lastChange->software) === 'vanilla') {
-                        $provider = !empty($latestModpack->provider) ? ucfirst($latestModpack->provider) : 'Modpack';
-                        $version = $latestModpack->modpack_version ?: ($variables['MINECRAFT_VERSION'] ?? 'Installed');
-
-                        return [
-                            'software'     => $latestModpack->modpack_name,
-                            'version'      => $version,
-                            'build'        => $provider,
-                            'installed_at' => $modpackTime->diffForHumans(),
-                            'source'       => 'modpack',
-                            'icon'         => $latestModpack->modpack_icon_url ?: $this->findSoftwareIcon('curseforge'),
-                        ];
-                    }
-                }
-            }
-        } catch (Throwable $e) {
-            Log::debug('[Versions] detectModpack DB error: ' . $e->getMessage());
-        }
-
-        try {
-            $fileRepo = app(DaemonFileRepository::class);
-            $fileRepo->setServer($server);
-            $metaJson = (string) $fileRepo->getContent('/.modpack-manager.json', 32 * 1024);
-
-            if (!empty($metaJson)) {
-                $meta = json_decode($metaJson, true);
-                if (is_array($meta) && !empty($meta['name'])) {
-                    $installedAt = !empty($meta['installed_at']) ? Carbon::parse($meta['installed_at']) : null;
-                    $lastChangeTime = $lastChange?->updated_at;
-
-                    if (!$lastChangeTime || !$installedAt || $installedAt->gte($lastChangeTime) || strtolower($lastChange->software) === 'vanilla') {
-                        return [
-                            'software'     => (string) $meta['name'],
-                            'version'      => (string) ($meta['version'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Installed')),
-                            'build'        => !empty($meta['provider']) ? ucfirst((string) $meta['provider']) : 'Modpack',
-                            'installed_at' => $installedAt?->diffForHumans(),
-                            'source'       => 'modpack',
-                            'icon'         => $meta['icon_url'] ?? $this->findSoftwareIcon('curseforge'),
-                        ];
-                    }
-                }
-            }
-        } catch (Throwable $e) {
-            Log::debug('[Versions] detectModpack metadata error: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    private function detectFromDisk(Server $server, array $variables): ?array
-    {
-        try {
-            $fileRepo = app(DaemonFileRepository::class);
-            $fileRepo->setServer($server);
-
-            $entries = (array) $fileRepo->getDirectory('/');
-            $fileNames = [];
-            foreach ($entries as $entry) {
-                $name = (string) ($entry['name'] ?? '');
-                $isDir = (bool) ($entry['directory'] ?? false);
-                if ($name !== '') {
-                    $fileNames[strtolower($name)] = [
-                        'name'  => $name,
-                        'isDir' => $isDir,
-                    ];
-                }
-            }
-
-            if (isset($fileNames['unix_args.txt'])) {
-                $content = (string) $fileRepo->getContent('unix_args.txt', 8192);
-                $detected = $this->parseArgsTxt($content, $variables);
-                if ($detected) {
-                    return $detected;
-                }
-            }
-
-            foreach (['run.sh', 'startserver.sh', 'start.sh'] as $sh) {
-                if (isset($fileNames[strtolower($sh)])) {
-                    $content = (string) $fileRepo->getContent($sh, 8192);
-                    $detected = $this->parseArgsTxt($content, $variables);
-                    if ($detected) {
-                        return $detected;
-                    }
-                }
-            }
-
-            foreach ($fileNames as $lower => $meta) {
-                if ($meta['isDir']) {
-                    continue;
-                }
-
-                if (preg_match('/neoforge-([0-9a-zA-Z\.\-]+).*?\.jar/i', $meta['name'], $m)) {
-                    return [
-                        'software'     => 'NeoForge',
-                        'version'      => $variables['MINECRAFT_VERSION'] ?? 'Latest',
-                        'build'        => "#{$m[1]}",
-                        'installed_at' => null,
-                        'source'       => 'disk',
-                    ];
-                }
-
-                if (preg_match('/forge-([0-9]+\.[0-9]+(?:\.[0-9]+)?)-([0-9a-zA-Z\.\-]+).*?\.jar/i', $meta['name'], $m)) {
-                    return [
-                        'software'     => 'Forge',
-                        'version'      => $m[1],
-                        'build'        => "#{$m[2]}",
-                        'installed_at' => null,
-                        'source'       => 'disk',
-                    ];
-                }
-
-                if (preg_match('/fabric-server-mc\.([0-9\.]+)-loader\.([0-9\.]+)/i', $meta['name'], $m)) {
-                    return [
-                        'software'     => 'Fabric',
-                        'version'      => $m[1],
-                        'build'        => "#loader-{$m[2]}",
-                        'installed_at' => null,
-                        'source'       => 'disk',
-                    ];
-                }
-            }
-
-            if (isset($fileNames['fabric-server-launch.jar']) || isset($fileNames['fabric-server-launcher.properties'])) {
-                $mc = $variables['MINECRAFT_VERSION'] ?? null;
-                $loader = $variables['FABRIC_VERSION'] ?? null;
-                return [
-                    'software'     => 'Fabric',
-                    'version'      => $mc ?: 'Minecraft',
-                    'build'        => $loader ? "#loader-{$loader}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['quilt-server-launch.jar']) || isset($fileNames['quilt-server-launcher.properties'])) {
-                return [
-                    'software'     => 'Quilt',
-                    'version'      => $variables['MINECRAFT_VERSION'] ?? 'Minecraft',
-                    'build'        => !empty($variables['QUILT_VERSION']) ? "#{$variables['QUILT_VERSION']}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['mohist.yml']) || isset($fileNames['mohist'])) {
-                return [
-                    'software'     => 'Mohist',
-                    'version'      => $variables['MOHIST_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => !empty($variables['BUILD_NUMBER']) ? "#{$variables['BUILD_NUMBER']}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['magma.yml'])) {
-                return [
-                    'software'     => 'Magma',
-                    'version'      => $variables['MAGMA_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['arclight.conf'])) {
-                return [
-                    'software'     => 'Arclight',
-                    'version'      => $variables['ARCLIGHT_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['purpur.yml'])) {
-                return [
-                    'software'     => 'Purpur',
-                    'version'      => $variables['PURPUR_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => !empty($variables['BUILD_NUMBER']) ? "#{$variables['BUILD_NUMBER']}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['folia.yml'])) {
-                return [
-                    'software'     => 'Folia',
-                    'version'      => $variables['FOLIA_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => !empty($variables['BUILD_NUMBER']) ? "#{$variables['BUILD_NUMBER']}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['paper.yml'])) {
-                return [
-                    'software'     => 'Paper',
-                    'version'      => $variables['PAPER_VERSION'] ?? ($variables['MINECRAFT_VERSION'] ?? 'Latest'),
-                    'build'        => !empty($variables['BUILD_NUMBER']) ? "#{$variables['BUILD_NUMBER']}" : null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-
-            if (isset($fileNames['spigot.yml'])) {
-                return [
-                    'software'     => 'Spigot',
-                    'version'      => $variables['MINECRAFT_VERSION'] ?? 'Latest',
-                    'build'        => null,
-                    'installed_at' => null,
-                    'source'       => 'disk',
-                ];
-            }
-        } catch (Throwable $e) {
-            Log::debug('[Versions] detectFromDisk error: ' . $e->getMessage());
-        }
-
-        return null;
-    }
-
-    private function parseArgsTxt(string $txt, array $variables): ?array
-    {
-        if (preg_match('#libraries/net/neoforged/neoforge/([0-9a-zA-Z\.\-]+)/#', $txt, $m)) {
-            $ver = $m[1];
-            $mc = $variables['MINECRAFT_VERSION'] ?? null;
-            if (!$mc && preg_match('/^(\d+)\.(\d+)/', $ver, $vParts)) {
-                $mc = '1.' . $vParts[1] . ($vParts[2] !== '0' ? '.' . $vParts[2] : '');
-            }
-
-            return [
-                'software'     => 'NeoForge',
-                'version'      => $mc ?: $ver,
-                'build'        => "#{$ver}",
-                'installed_at' => null,
-                'source'       => 'disk',
-            ];
-        }
-
-        if (preg_match('#libraries/net/minecraftforge/forge/([0-9]+\.[0-9]+(?:\.[0-9]+)?)-([0-9a-zA-Z\.\-]+)/#', $txt, $m)) {
-            return [
-                'software'     => 'Forge',
-                'version'      => $m[1],
-                'build'        => "#{$m[2]}",
-                'installed_at' => null,
-                'source'       => 'disk',
-            ];
-        }
-
-        if (preg_match('/FORGE_VERSION\s*=\s*["\']?([0-9]+\.[0-9]+(?:\.[0-9]+)?)-([0-9a-zA-Z\.\-]+)["\']?/i', $txt, $m)) {
-            return [
-                'software'     => 'Forge',
-                'version'      => $m[1],
-                'build'        => "#{$m[2]}",
-                'installed_at' => null,
-                'source'       => 'disk',
-            ];
-        }
-
-        return null;
+        return $info;
     }
 
     public function findSoftwareIcon(?string $softwareName): ?string
@@ -823,159 +700,180 @@ class VersionsPage extends Page
 
         $searchKey = strtoupper(trim($softwareName));
 
-        if (!empty($this->types) && is_array($this->types)) {
-            foreach ($this->types as $group) {
-                if (is_array($group)) {
-                    foreach ($group as $key => $data) {
-                        if (strtoupper((string) $key) === $searchKey || strtoupper((string) ($data['name'] ?? '')) === $searchKey) {
-                            if (!empty($data['icon'])) {
-                                return (string) $data['icon'];
-                            }
-                        }
-                    }
+        foreach ($this->types as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+
+            foreach ($group as $key => $data) {
+                $matches = strtoupper((string) $key) === $searchKey || strtoupper((string) ($data['name'] ?? '')) === $searchKey;
+
+                if ($matches && !empty($data['icon'])) {
+                    return (string) $data['icon'];
                 }
             }
         }
 
         $lower = strtolower($softwareName);
-        if (str_contains($lower, 'mohist')) {
-            return 'https://s3.mcjars.app/icons/mohist.png';
-        }
-        if (str_contains($lower, 'magma')) {
-            return 'https://s3.mcjars.app/icons/magma.png';
-        }
-        if (str_contains($lower, 'arclight')) {
-            return 'https://s3.mcjars.app/icons/arclight.png';
-        }
-        if (str_contains($lower, 'folia')) {
-            return 'https://s3.mcjars.app/icons/folia.png';
-        }
-        if (str_contains($lower, 'forge')) {
-            return 'https://s3.mcjars.app/icons/forge.png';
-        }
-        if (str_contains($lower, 'fabric')) {
-            return 'https://s3.mcjars.app/icons/fabric.png';
-        }
-        if (str_contains($lower, 'neoforge')) {
-            return 'https://s3.mcjars.app/icons/neoforge.png';
-        }
-        if (str_contains($lower, 'quilt')) {
-            return 'https://s3.mcjars.app/icons/quilt.png';
-        }
-        if (str_contains($lower, 'paper')) {
-            return 'https://s3.mcjars.app/icons/paper.png';
-        }
-        if (str_contains($lower, 'purpur')) {
-            return 'https://s3.mcjars.app/icons/purpur.png';
+
+        foreach (self::ICON_NEEDLES as $needle => $slug) {
+            if (str_contains($lower, $needle)) {
+                return "https://s3.mcjars.app/icons/{$slug}.png";
+            }
         }
 
-        $slug = strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $softwareName));
-        if ($slug) {
-            return "https://s3.mcjars.app/icons/{$slug}.png";
+        $slug = strtolower((string) preg_replace('/[^a-zA-Z0-9]/', '', $softwareName));
+
+        return $slug !== '' ? "https://s3.mcjars.app/icons/{$slug}.png" : null;
+    }
+
+    public function getFilteredTypesProperty(): array
+    {
+        $result   = [];
+        $search   = strtolower(trim($this->search));
+        $seenKeys = [];
+
+        foreach ($this->types as $category => $softwares) {
+            if ($search === '' && $this->selectedCategory !== 'all' && $this->selectedCategory !== $category) {
+                continue;
+            }
+
+            foreach ($softwares as $key => $software) {
+                if ($search !== '') {
+                    $upperKey = strtoupper((string) $key);
+
+                    if (isset($seenKeys[$upperKey])) {
+                        continue;
+                    }
+
+                    $haystack = ($software['name'] ?? '') . ' ' . ($software['description'] ?? '') . ' ' . $key;
+
+                    if (!SoftwareParser::matchesSearch($haystack, $search)) {
+                        continue;
+                    }
+
+                    $seenKeys[$upperKey] = true;
+                }
+
+                $result[$category][$key] = $software;
+            }
+        }
+
+        return $result;
+    }
+
+    public function getFilteredVersionsProperty(): array
+    {
+        $search = strtolower(trim($this->versionSearch));
+
+        $filtered = array_filter(
+            $this->availableVersions,
+            function ($vData, $k) use ($search): bool {
+                if (!$this->showSnapshots && ($vData['type'] ?? 'RELEASE') !== 'RELEASE') {
+                    return false;
+                }
+
+                if ($search !== '' && !str_contains(strtolower((string) $k), $search)) {
+                    return false;
+                }
+
+                return true;
+            },
+            ARRAY_FILTER_USE_BOTH
+        );
+
+        if ($filtered === [] && !$this->showSnapshots && $search === '') {
+            return $this->availableVersions;
+        }
+
+        return $filtered;
+    }
+
+    public function isServerRunning(): bool
+    {
+        return in_array(strtolower($this->containerStatus), ['running', 'starting', 'restarting'], true);
+    }
+
+    private function ensureAuthorized(): bool
+    {
+        if ($this->canManageVersions()) {
+            return true;
+        }
+
+        Notification::make()->title('Unauthorized action.')->danger()->send();
+
+        return false;
+    }
+
+    private function syncSelectedVersionWithFilter(): void
+    {
+        $filtered = $this->filteredVersions;
+
+        if ($filtered === []) {
+            return;
+        }
+
+        if ($this->selectedVersion === null || !array_key_exists((string) $this->selectedVersion, $filtered)) {
+            $first = array_key_first($filtered);
+            if ($first !== null) {
+                $this->selectVersion((string) $first);
+            }
+        }
+    }
+
+    private function firstRelease(): string|int|null
+    {
+        if (!$this->showSnapshots) {
+            foreach ($this->availableVersions as $id => $meta) {
+                if (($meta['type'] ?? 'RELEASE') === 'RELEASE') {
+                    return $id;
+                }
+            }
+        }
+
+        return array_key_first($this->availableVersions);
+    }
+
+    private function findBuild(array $builds, string $wanted): ?array
+    {
+        if ($wanted === 'latest' || $wanted === '') {
+            return $builds[0] ?? null;
+        }
+
+        foreach ($builds as $b) {
+            if ((string) ($b['name'] ?? '') === $wanted || (string) ($b['buildNumber'] ?? '') === $wanted) {
+                return $b;
+            }
         }
 
         return null;
     }
 
-    private function detectFromEgg(Server $server, array $variables): ?array
+    private function refreshContainerStatus(): void
     {
         try {
-            $eggName = $server->egg?->name ?? '';
-
-            $version = $variables['MINECRAFT_VERSION']
-                ?? $variables['VANILLA_VERSION']
-                ?? $variables['PAPER_VERSION']
-                ?? $variables['PURPUR_VERSION']
-                ?? $variables['VERSION']
-                ?? null;
-
-            $software = null;
-            $build = null;
-            $serverJar = strtolower(trim((string) ($variables['SERVER_JARFILE'] ?? '')));
-
-            if (str_contains($serverJar, 'mohist')) {
-                $software = 'Mohist';
-                $version = $variables['MOHIST_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'purpur')) {
-                $software = 'Purpur';
-                $version = $variables['PURPUR_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'magma')) {
-                $software = 'Magma';
-                $version = $variables['MAGMA_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'arclight')) {
-                $software = 'Arclight';
-                $version = $variables['ARCLIGHT_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'folia')) {
-                $software = 'Folia';
-                $version = $variables['FOLIA_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'paper')) {
-                $software = 'Paper';
-                $version = $variables['PAPER_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'fabric')) {
-                $software = 'Fabric';
-                $version = $variables['FABRIC_VERSION'] ?? $version;
-            } elseif (str_contains($serverJar, 'forge')) {
-                $software = 'Forge';
-                $version = $variables['FORGE_VERSION'] ?? $version;
-            } elseif (!empty($variables['MOHIST_VERSION'])) {
-                $software = 'Mohist';
-                $version = $variables['MOHIST_VERSION'];
-            } elseif (!empty($variables['PURPUR_VERSION'])) {
-                $software = 'Purpur';
-                $version = $variables['PURPUR_VERSION'];
-            } elseif (!empty($variables['FORGE_VERSION'])) {
-                $software = 'Forge';
-                $build = "#{$variables['FORGE_VERSION']}";
-            } elseif (!empty($variables['NEOFORGE_VERSION'])) {
-                $software = 'NeoForge';
-                $build = "#{$variables['NEOFORGE_VERSION']}";
-            } elseif (!empty($variables['FABRIC_VERSION'])) {
-                $software = 'Fabric';
-                $build = "#{$variables['FABRIC_VERSION']}";
-            } elseif (!empty($variables['QUILT_VERSION'])) {
-                $software = 'Quilt';
-                $build = "#{$variables['QUILT_VERSION']}";
-            } elseif (!empty($variables['PAPER_VERSION'])) {
-                $software = 'Paper';
-                $version = $variables['PAPER_VERSION'];
-            } elseif (stripos($eggName, 'mohist') !== false) {
-                $software = 'Mohist';
-            } elseif (stripos($eggName, 'purpur') !== false) {
-                $software = 'Purpur';
-            } elseif (stripos($eggName, 'paper') !== false) {
-                $software = 'Paper';
-            } elseif (stripos($eggName, 'spigot') !== false) {
-                $software = 'Spigot';
-            } elseif (stripos($eggName, 'forge') !== false) {
-                $software = 'Forge';
-            } elseif (stripos($eggName, 'fabric') !== false) {
-                $software = 'Fabric';
-            } elseif (stripos($eggName, 'bungee') !== false) {
-                $software = 'BungeeCord';
-            } elseif (stripos($eggName, 'velocity') !== false) {
-                $software = 'Velocity';
-            } elseif (stripos($eggName, 'vanilla') !== false) {
-                $software = 'Vanilla';
-            } elseif (!empty($eggName)) {
-                $software = $eggName;
-            }
-
-            $build = $build ?? (!empty($variables['BUILD_NUMBER']) ? "#{$variables['BUILD_NUMBER']}" : null);
-
-            if ($software || $version) {
-                return [
-                    'software'     => $software ?: 'Minecraft',
-                    'version'      => ($version && $version !== 'latest') ? $version : ($version === 'latest' ? 'Latest' : 'Default'),
-                    'build'        => $build,
-                    'installed_at' => null,
-                    'source'       => 'egg',
-                ];
-            }
+            $repo = app(DaemonServerRepository::class);
+            $this->containerStatus = (string) ($repo->setServer($this->getServer())->getDetails()['state'] ?? 'offline');
         } catch (Throwable $e) {
-            Log::debug('[Versions] detectFromEgg error: ' . $e->getMessage());
+            Log::debug('[Versions] container status error: ' . $e->getMessage());
+            $this->containerStatus = 'offline';
         }
+    }
 
-        return null;
+    private function adoptActiveChange(): void
+    {
+        $active = VersionChange::query()
+            ->where('server_id', $this->getServer()->id)
+            ->active()
+            ->latest('id')
+            ->first();
+
+        if ($active) {
+            $this->isChanging   = true;
+            $this->changeId     = $active->id;
+            $this->changeStatus = $active->status;
+            $this->changeLog    = $active->log ?? '';
+        }
     }
 
     private function checkJavaCompatibility(string $version): void
@@ -984,17 +882,9 @@ class VersionsPage extends Page
 
         try {
             $requiredJava = isset($this->versionDetails['java']) ? (int) $this->versionDetails['java'] : null;
+            $image        = $this->getServer()->image ?? '';
 
-            if ($requiredJava === null) {
-                return;
-            }
-
-            $image = $this->getServer()->image ?? '';
-            if (empty($image)) {
-                return;
-            }
-
-            if (!preg_match('/java[_-]?(\d+)/i', $image, $matches)) {
+            if ($requiredJava === null || $image === '' || !preg_match('/java[_-]?(\\d+)/i', $image, $matches)) {
                 return;
             }
 
@@ -1009,40 +899,7 @@ class VersionsPage extends Page
                 ];
             }
         } catch (Throwable $e) {
-            \Log::debug('[Versions] checkJavaCompatibility error: ' . $e->getMessage());
+            Log::debug('[Versions] checkJavaCompatibility error: ' . $e->getMessage());
         }
-    }
-
-    public function getFilteredTypesProperty(): array
-    {
-        $result = [];
-        $search = strtolower(trim($this->search));
-
-        foreach ($this->types as $category => $softwares) {
-            if ($this->selectedCategory !== 'all' && $this->selectedCategory !== $category) {
-                continue;
-            }
-
-            foreach ($softwares as $key => $software) {
-                if ($search !== '') {
-                    $name = strtolower($software['name'] ?? '');
-                    $desc = strtolower($software['description'] ?? '');
-                    $keyLower = strtolower($key);
-
-                    if (!str_contains($name, $search) && !str_contains($desc, $search) && !str_contains($keyLower, $search)) {
-                        continue;
-                    }
-                }
-
-                $result[$category][$key] = $software;
-            }
-        }
-
-        return $result;
-    }
-
-    public function isServerRunning(): bool
-    {
-        return in_array(strtolower($this->containerStatus), ['running', 'starting', 'restarting'], true);
     }
 }

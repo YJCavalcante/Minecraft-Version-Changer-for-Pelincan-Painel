@@ -3,7 +3,7 @@
 namespace Pelican\Versions\Models;
 
 use App\Models\Server;
-use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -35,11 +35,45 @@ class VersionChange extends Model
         return $this->belongsTo(Server::class);
     }
 
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->whereIn('status', [self::STATUS_PENDING, self::STATUS_CHANGING]);
+    }
+
+    public static function staleThresholdMinutes(): int
+    {
+        return max(5, (int) config('versions.stale_after_minutes', 90));
+    }
+
+    public static function failStale(?int $serverId = null): int
+    {
+        $query = static::query()
+            ->active()
+            ->where('updated_at', '<', now()->subMinutes(static::staleThresholdMinutes()));
+
+        if ($serverId !== null) {
+            $query->where('server_id', $serverId);
+        }
+
+        return $query->update([
+            'status'        => self::STATUS_FAILED,
+            'error_message' => 'Marked as failed: no progress was reported (worker stopped or timed out).',
+            'updated_at'    => now(),
+        ]);
+    }
+
+    public function isStale(): bool
+    {
+        return $this->isActive()
+            && $this->updated_at !== null
+            && $this->updated_at->lt(now()->subMinutes(static::staleThresholdMinutes()));
+    }
+
     public function appendLog(string $line): void
     {
         $timestamp = now()->format('H:i:s');
         $current   = $this->log ?? '';
-        $this->update(['log' => $current . "[{$timestamp}] {$line}\n"]);
+        $this->update(['log' => $current . "[{$timestamp}] {$line}" . PHP_EOL]);
     }
 
     public function markChanging(): void

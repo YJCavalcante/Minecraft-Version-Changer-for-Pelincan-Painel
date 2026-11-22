@@ -9,40 +9,82 @@ use Throwable;
 class WarmVersionCacheCommand extends Command
 {
     protected $signature   = 'versions:warm-cache';
-    protected $description = 'Pre-warms the MCJars API cache for all software types and their versions.';
+    protected $description = 'Refreshes the MCJars API cache for all software types, their versions and the latest builds.';
 
     public function handle(McJarsService $mcJarsService): int
     {
         $this->info('[Versions] Warming MCJars cache...');
 
-        $types = [];
-        try {
-            $types = $mcJarsService->getTypes();
-            $this->info('  ✓ Types cached (' . array_sum(array_map('count', $types)) . ' software entries)');
-        } catch (Throwable $e) {
-            $this->error('  ✗ Failed to fetch types: ' . $e->getMessage());
+        $types = $mcJarsService->getTypes(true);
+
+        if ($types === [] || $mcJarsService->lastFetchFailed('types')) {
+            $this->error('  Failed to fetch fresh types from MCJars; keeping existing cache and aborting warm-up.');
+
             return self::FAILURE;
         }
 
-        $total   = 0;
-        $failed  = 0;
+        $this->info('  Types cached (' . array_sum(array_map('count', $types)) . ' software entries)');
 
-        foreach ($types as $category => $softwares) {
-            foreach ($softwares as $key => $software) {
+        $buildsPerSoftware   = max(0, (int) config('versions.warm_builds_versions', 2));
+        $total               = 0;
+        $failed              = 0;
+        $consecutiveFailures = 0;
+        $seen                = [];
+
+        foreach ($types as $softwares) {
+            foreach (array_keys((array) $softwares) as $key) {
+                $key = strtoupper((string) $key);
+
+                if (isset($seen[$key])) {
+                    continue;
+                }
+
+                $seen[$key] = true;
+
                 try {
-                    $versions = $mcJarsService->getVersions($key);
-                    $count    = count($versions);
-                    $total   += $count;
-                    $this->line("  ✓ {$key}: {$count} versions cached");
+                    $versions = $mcJarsService->getVersions($key, true);
+                    usleep(150000);
+
+                    if ($mcJarsService->lastFetchFailed("versions:{$key}")) {
+                        $this->warn("  {$key}: upstream fetch failed");
+                        $failed++;
+                        $consecutiveFailures++;
+
+                        if ($consecutiveFailures >= 3) {
+                            $this->error('  Upstream API appears unreachable; stopping warm-up early.');
+
+                            return self::FAILURE;
+                        }
+
+                        continue;
+                    }
+
+                    $consecutiveFailures = 0;
+
+                    if ($versions === []) {
+                        $this->warn("  {$key}: no versions returned");
+                        $failed++;
+                        continue;
+                    }
+
+                    $total += count($versions);
+                    $this->line("  {$key}: " . count($versions) . ' versions cached');
+
+                    $releases = array_keys(array_filter($versions, fn (array $v): bool => ($v['type'] ?? 'RELEASE') === 'RELEASE'));
+
+                    foreach (array_slice($releases, 0, $buildsPerSoftware) as $version) {
+                        $mcJarsService->getBuilds($key, (string) $version, true);
+                        usleep(150000);
+                    }
                 } catch (Throwable $e) {
-                    $this->warn("  ✗ {$key}: failed — " . $e->getMessage());
+                    $this->warn("  {$key}: failed - " . $e->getMessage());
                     $failed++;
                 }
             }
         }
 
         $this->newLine();
-        $this->info("[Versions] Cache warm complete. {$total} version sets cached, {$failed} failed.");
+        $this->info("[Versions] Cache warm complete. {$total} versions cached, {$failed} failed.");
 
         return self::SUCCESS;
     }

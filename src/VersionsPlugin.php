@@ -15,16 +15,18 @@ class VersionsPlugin implements Plugin
 
     public function register(Panel $panel): void
     {
-        Subuser::registerCustomPermissions(
-            'versions',
-            ['change'],
-            null,
-            'tabler-arrows-exchange',
-            false
-        );
+        if ($panel->getId() === 'server') {
+            Subuser::registerCustomPermissions(
+                'versions',
+                ['change'],
+                null,
+                'tabler-arrows-exchange',
+                false
+            );
+        }
 
         $panelName = str($panel->getId())->title();
-        $pagesDir = plugin_path($this->getId(), "src/Filament/{$panelName}/Pages");
+        $pagesDir  = plugin_path($this->getId(), "src/Filament/{$panelName}/Pages");
 
         if (is_dir($pagesDir)) {
             $panel->discoverPages(

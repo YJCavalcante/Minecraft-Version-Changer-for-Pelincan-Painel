@@ -6,6 +6,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\MaxAttemptsExceededException;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Pelican\Versions\Models\VersionChange;
@@ -18,6 +19,7 @@ class ChangeVersionJob implements ShouldQueue
 
     public int $timeout = 3600;
     public int $tries   = 1;
+    public bool $failOnTimeout = true;
 
     public function __construct(
         public readonly int $changeRecordId
@@ -52,7 +54,15 @@ class ChangeVersionJob implements ShouldQueue
     {
         $record = VersionChange::find($this->changeRecordId);
 
-        if ($record) {
+        if ($record && $e instanceof MaxAttemptsExceededException
+            && $record->status === VersionChange::STATUS_CHANGING
+            && $record->updated_at !== null
+            && $record->updated_at->gt(now()->subMinutes(2))) {
+            Log::warning("[Versions] ChangeVersionJob: duplicate delivery ignored for record #{$this->changeRecordId}. Check that the queue retry_after is greater than the job timeout.");
+            return;
+        }
+
+        if ($record && $record->status !== VersionChange::STATUS_FAILED) {
             $record->markFailed($e->getMessage());
             $record->appendLog('JOB FAILED: ' . $e->getMessage());
         }

@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.2.0-beta] - 2026-11-22
+
+### Added
+- **Universal hybrid server detection** (Youer, Mohist, Magma, Arclight, CatServer, Ketting, Banner, Thermos/Cauldron, Crucible, Cardboard) from launch files, `/libraries` metadata, config files, jar names, and egg variables.
+- **Rollback on failure**: the previous jar, transient launch artifacts, and `libraries/` are moved aside first and restored automatically if the download, verification, or extraction fails. The server is restarted if it was running.
+- **Concurrency guard & Clean Install confirmation**: a database transaction with a server row lock prevents simultaneous version changes; stuck `pending`/`changing` records fail automatically after `VERSIONS_STALE_AFTER` minutes; installs pass through the confirmation review dialog before wiping or swapping files.
+- `versions:prune` command (daily at 03:30) that fails stuck records and removes history older than `VERSIONS_HISTORY_RETENTION` days while keeping the latest successful change per server.
+- New configuration keys: `download_start_timeout`, `builds_cache_ttl`, `builds_limit`, `detection_cache_ttl`, `abort_if_not_stopped`, `stop_wait_seconds`, `stale_after_minutes`, `history_retention_days`, `warm_builds_versions`, `allowed_download_hosts` (`VERSIONS_ALLOWED_HOSTS`).
+
+### Changed
+- Livewire state that must not be controlled by the browser (`selectedBuild`, modals, download target, progress, history) is `#[Locked]`, actions enforce `canManageVersions()`, and the target jar filename supports `SERVER_JARFILE`, `JARFILE`, `JAR_NAME`, and `SERVER_JAR`.
+- Download URLs must use `http`/`https`, reject local/private hosts, check `.zip` extension safely by URL path/query, enforce a minimum 4 KB verified artifact size and a startup grace timeout on Wings.
+- MCJars: empty or failed responses are never cached, stale fallback is served when upstream is down, cache warming aborts early on upstream outages, and installer bundle sizes are preserved.
+- Release versions sort numerically (highest first), typo-tolerant global search matches across all categories (`SoftwareParser::matchesSearch`), and filtering versions inside the install modal keeps `$selectedVersion` and builds synchronized.
+- Current version detection runs via `wire:init` (reading warm cache immediately on `mount()`), and execution logs are loaded on demand when opening a log modal.
+
+### Fixed
+- NeoForge versions (`21.1.172`, `26.1.2.109`) map cleanly to Minecraft versions and `/libraries` directory selection prioritizes the newly installed build over old higher-numbered folders.
+- Stale hybrid config files (`youer.yml`, etc.) left over before modpack or `.zip` installations no longer override pure loaders (`NeoForge`, `Forge`, `Vanilla`), and backup/classifier suffixes (`.jar.bak`, `-server`) are no longer misparsed.
+- Queue job: `failOnTimeout` enabled, `sync` queue execution immediately reflects completion/failure without overwriting real error details, and duplicate deliveries no longer mark an active change as failed.
+- Self-contained `.mvc` Blade wrapper and status badge CSS classes prevent Livewire multi-root morphing issues and Tailwind compilation gaps.
+
+---
+
 ## [1.1.0-beta] - 2026-09-19
 
 ### Added

@@ -3,7 +3,9 @@
 namespace Pelican\Versions\Providers;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
+use Pelican\Versions\Console\Commands\PruneVersionChangesCommand;
 use Pelican\Versions\Console\Commands\WarmVersionCacheCommand;
 
 class VersionsServiceProvider extends ServiceProvider
@@ -23,6 +25,7 @@ class VersionsServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 WarmVersionCacheCommand::class,
+                PruneVersionChangesCommand::class,
             ]);
         }
 
@@ -32,8 +35,13 @@ class VersionsServiceProvider extends ServiceProvider
                 ->withoutOverlapping()
                 ->runInBackground()
                 ->onFailure(function () {
-                    \Illuminate\Support\Facades\Log::warning('[Versions] Daily cache warm failed.');
+                    Log::warning('[Versions] Daily cache warm failed.');
                 });
+
+            $schedule->command('versions:prune')
+                ->dailyAt('03:30')
+                ->withoutOverlapping()
+                ->runInBackground();
         });
     }
 }
