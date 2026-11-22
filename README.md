@@ -1,4 +1,4 @@
-# Minecraft Version Changer for Pelican Panel (v1.2.0-beta)
+# Minecraft Version Changer for Pelican Panel (v1.2.0)
 
 Effortlessly switch your Minecraft server's software and version directly from the Pelican Panel web interface. Featuring dynamic egg variable synchronization, universal hybrid & modpack detection, transactional rollback safety, and zero theme interference.
 

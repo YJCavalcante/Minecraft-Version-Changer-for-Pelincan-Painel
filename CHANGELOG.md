@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [1.2.0-beta] - 2026-11-22
+## [1.2.0] - 2026-11-22
 
 ### Added
 - **Universal hybrid server detection** (Youer, Mohist, Magma, Arclight, CatServer, Ketting, Banner, Thermos/Cauldron, Crucible, Cardboard) from launch files, `/libraries` metadata, config files, jar names, and egg variables.
@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - New configuration keys: `download_start_timeout`, `builds_cache_ttl`, `builds_limit`, `detection_cache_ttl`, `abort_if_not_stopped`, `stop_wait_seconds`, `stale_after_minutes`, `history_retention_days`, `warm_builds_versions`, `allowed_download_hosts` (`VERSIONS_ALLOWED_HOSTS`).
 
 ### Changed
+- First stable release (`1.2.0`); `plugin.json` declares `api_version: 1` and sets `update_url` to `https://hub.pelican.dev/plugins/versions/update.json`.
 - Livewire state that must not be controlled by the browser (`selectedBuild`, modals, download target, progress, history) is `#[Locked]`, actions enforce `canManageVersions()`, and the target jar filename supports `SERVER_JARFILE`, `JARFILE`, `JAR_NAME`, and `SERVER_JAR`.
 - Download URLs must use `http`/`https`, reject local/private hosts, check `.zip` extension safely by URL path/query, enforce a minimum 4 KB verified artifact size and a startup grace timeout on Wings.
 - MCJars: empty or failed responses are never cached, stale fallback is served when upstream is down, cache warming aborts early on upstream outages, and installer bundle sizes are preserved.
